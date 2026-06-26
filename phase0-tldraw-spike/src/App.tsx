@@ -160,7 +160,7 @@ export default function App() {
       scheduleSelectionPublish(editor)
       normalizeImportedMediaShapes(editor, Object.values(changes.added))
       normalizeLegacyDefaultArrowBends(editor, Object.values(changes.added))
-      detachMediaArrowBindings(editor, Object.values(changes.added))
+      detachArrowBindings(editor, Object.values(changes.added))
       scheduleCanvasDocumentSave(editor)
     })
     editor.disposables.add(unsubscribe)
@@ -184,7 +184,7 @@ export default function App() {
       }
       if (document.camera) editor.setCamera(document.camera, { immediate: true })
       normalizeLegacyDefaultArrowBends(editor)
-      detachMediaArrowBindings(editor)
+      detachArrowBindings(editor)
       void persistCanvasDocument(editor)
       showStatus('Restored local canvas.', 1800)
       void publishCurrentSelection(editor)
@@ -677,21 +677,12 @@ function focusImportedMedia(editor: Editor) {
   })
 }
 
-function detachMediaArrowBindings(editor: Editor, records: unknown[] = editor.store.allRecords()) {
-  const mediaShapeIds = new Set(
-    editor
-      .getCurrentPageShapes()
-      .filter((shape) => shape.type === MEDIA_IMAGE_SHAPE || shape.type === 'image' || shape.type === 'video')
-      .map((shape) => shape.id),
-  )
-  if (mediaShapeIds.size === 0) return
-
+function detachArrowBindings(editor: Editor, records: unknown[] = editor.store.allRecords()) {
   const bindingIds = records
-    .filter((record): record is { id: string; typeName: string; type: string; fromId?: TLShapeId; toId?: TLShapeId } => {
+    .filter((record): record is { id: string; typeName: string; type: string } => {
       if (!record || typeof record !== 'object') return false
-      const candidate = record as { typeName?: string; type?: string; fromId?: TLShapeId; toId?: TLShapeId }
-      if (candidate.typeName !== 'binding' || candidate.type !== 'arrow') return false
-      return Boolean((candidate.fromId && mediaShapeIds.has(candidate.fromId)) || (candidate.toId && mediaShapeIds.has(candidate.toId)))
+      const candidate = record as { typeName?: string; type?: string }
+      return candidate.typeName === 'binding' && candidate.type === 'arrow'
     })
     .map((binding) => binding.id)
 
