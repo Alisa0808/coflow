@@ -2765,3 +2765,67 @@ Next plan:
 - Add `annotation.render_composite`: render the selected frame into an image that includes the source media, arrows, boxes, notes, and spatial layout, then pass it as a visual reference/mask where the provider supports it.
 - Add polling/resume for long-running Atlas jobs so processing placeholders can update after the initial request returns.
 - Move the current command-bus bridge closer to the final Codex Skill runtime path.
+
+## 2026-06-26 — Stop direct canvas provider execution and return to Codex-led frame context
+
+User report:
+
+- The generated image was unrelated to the source frame.
+- The generated image contained the visual red annotation box as image content.
+- This proves the problem is not simply weak Atlas prompt wording. The direct canvas-to-provider path is mixing reference media, annotation overlays, and task intent incorrectly.
+
+Decision:
+
+- Abandon direct provider execution from the whiteboard button as the product main path.
+- Return to the intended Cowart-like shape:
+  - tldraw canvas is the visual workspace;
+  - Codex reads a selected/bounded frame context;
+  - Codex/active Skill decides the task, provider, model, prompt, reference strategy, and execution;
+  - canvas receives structured writeback/version operations.
+- Atlas remains a provider executor, but it should be invoked by Codex/Skill, not by a canvas button that bypasses Codex.
+
+Changes made:
+
+- Removed automatic browser polling of pending `canvas.agent_prompt` / `canvas.create_version` commands.
+- The selected frame button no longer runs generation or calls `/api/executions/run-latest`.
+- The selected frame button now says `Send to Codex`.
+- Clicking it only:
+  - extracts the selected frame context;
+  - materializes media paths;
+  - writes `.codex-media-canvas/metadata/latest-frame-context.json`;
+  - records `codex.frame_context_sent` in the operation log;
+  - shows a status message with media + annotation counts.
+- Updated `/api/agent/prompt` response copy so it no longer claims the browser will auto-claim and execute provider calls.
+
+Current boundary:
+
+- The canvas can expose a bounded frame context for Codex.
+- The canvas does not yet make Codex itself natively read a clicked frame inside the chat runtime.
+- The remaining bridge is local metadata / future MCP:
+  - `latest-frame-context.json`
+  - operation log
+  - future `canvas.get_frame_context(frameId)` tool.
+
+Verification:
+
+- `npm run build`: passed.
+- `npm test`: passed, 18/18.
+- `node --check server.mjs`: passed.
+
+Manual acceptance checklist:
+
+1. Refresh `http://127.0.0.1:5176/`.
+2. Select a frame.
+3. Confirm the frame affordance says `Send to Codex`, not `Generate`.
+4. Click it.
+5. Confirm no generated image, skeleton, Atlas output, or lineage arrow is created.
+6. Confirm `.codex-media-canvas/metadata/latest-frame-context.json` updates with the selected frame's media and annotations.
+
+Next plan:
+
+- Implement the real Codex-facing contract:
+  - `canvas.get_frame_context(frameId?)`;
+  - `canvas.capture_frame(frameId?)`;
+  - `canvas.create_version(...)`.
+- Package this as a Codex agent Skill/MCP bridge instead of a whiteboard API button.
+- Use Atlas only behind the Codex Skill executor after Codex has correctly selected source assets, prompt, references, and writeback semantics.

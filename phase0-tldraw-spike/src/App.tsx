@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import {
   Tldraw,
-  createBindingId,
   createShapeId,
   toRichText,
   type Editor,
@@ -14,25 +13,13 @@ import {
 import { buildBoundedFrameContextPromptPart } from './agentPromptParts'
 import {
   extractFrameContext,
-  createVersionPlacement,
-  getShapeBounds,
   richTextToPlainText,
   type Bounds,
   type CanvasShapeRecord,
   type FrameContext,
 } from './canvasContracts'
-import { type GenerationMode, type OutputMediaType, type ProviderId } from './generationContract'
-import { GenerateMediaActionUtil } from './generateMediaActionUtil'
 import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil, type MediaImageShape } from './mediaShape'
-import {
-  fetchPendingCommands,
-  materializeAsset,
-  publishFrameContext,
-  publishGenerationRequest,
-  queueAgentPrompt,
-  recordOperation,
-  runLatestGenerationRequest,
-} from './api'
+import { materializeAsset, publishFrameContext, recordOperation } from './api'
 
 const shapeUtils = [MediaImageShapeUtil]
 const MAX_ASSET_SIZE_BYTES = 2 * 1024 * 1024 * 1024
@@ -92,36 +79,7 @@ export default function App() {
   const assetStore = useMemo(() => createLocalAssetStore(setUploadProgress, showStatus), [])
 
   useEffect(() => {
-    let stopped = false
-
-    async function pollPendingCommands() {
-      if (stopped) return
-
-      try {
-        const commands = await fetchPendingCommands()
-        for (const command of commands) {
-          if (command.type === 'canvas.create_version' || command.type === 'canvas.agent_prompt') {
-            await generateVersion(command.frameId, {
-              prompt: command.prompt,
-              provider: command.provider,
-              outputMediaType: command.outputMediaType,
-              generationMode: command.generationMode as GenerationMode | undefined,
-            })
-          }
-        }
-      } catch {
-        // The local backend may still be starting; keep the canvas usable.
-      }
-    }
-
-    const interval = window.setInterval(() => {
-      void pollPendingCommands()
-    }, 1000)
-    void pollPendingCommands()
-
     return () => {
-      stopped = true
-      window.clearInterval(interval)
       if (statusTimeoutRef.current !== null) window.clearTimeout(statusTimeoutRef.current)
     }
   }, [])
@@ -145,27 +103,11 @@ export default function App() {
     setStatus('')
   }
 
-  async function queueFrameGenerate(frameId: string) {
-    try {
-      const command = await queueAgentPrompt({
-        frameId,
-        prompt: 'Use the selected frame as the edit source. Follow all canvas annotations exactly.',
-        provider: 'atlas',
-      })
-      showStatus(`Queued Codex skill command ${command.id}`)
-    } catch (error) {
-      showStatus(error instanceof Error ? error.message : 'Failed to queue Codex skill command.', 5200)
-    }
-  }
-
-  async function generateVersion(
-    frameId?: string,
-    options: { outputMediaType?: OutputMediaType; generationMode?: GenerationMode; prompt?: string; provider?: ProviderId } = {},
-  ) {
+  async function sendFrameToCodex(frameId: string) {
     const editor = editorRef.current
     if (!editor) return
     const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
-    const frame = frameId ? shapes.find((shape) => shape.id === frameId && shape.type === 'frame') : findContextFrame(editor, shapes)
+    const frame = shapes.find((shape) => shape.id === frameId && shape.type === 'frame') ?? findContextFrame(editor, shapes)
     if (!frame) {
       showStatus('No frame found. Select a frame or use the seeded task frame.', 5200)
       return
@@ -177,175 +119,16 @@ export default function App() {
       return
     }
 
-    const anchorBounds = context.bounds
-    const outputSize = {
-      w: context.anchorMedia.bounds.w,
-      h: context.anchorMedia.bounds.h,
-    }
-    const occupied = shapes.map(getShapeBounds)
-    const placement = createVersionPlacement(anchorBounds, outputSize, occupied)
-    const childId = createShapeId()
-    const arrowId = createShapeId()
-    const parentShapeId = context.anchorMedia.shapeId as TLShapeId
-    const generatedAt = Date.now()
-    const outputMediaType = options.outputMediaType ?? (context.anchorMedia.shapeType === 'video' ? 'video' : 'image')
-    const providerOutputLocalPath =
-      outputMediaType === 'video'
-        ? `.codex-media-canvas/assets/videos/generated-${generatedAt}.mp4`
-        : `.codex-media-canvas/assets/images/generated-${generatedAt}.svg`
-    const canvasPreviewLocalPath = `.codex-media-canvas/assets/images/generated-preview-${generatedAt}.svg`
-    const promptPart = buildBoundedFrameContextPromptPart(context, options.prompt ? 'codex-agent-bridge' : 'canvas-frame-action')
-    const generateMediaAction = GenerateMediaActionUtil.create({
-      source: options.prompt ? 'codex-agent-bridge' : 'canvas-frame-action',
-      prompt: options.prompt,
-      provider: options.provider,
-      frameContext: promptPart,
-      childShapeId: childId,
-      arrowShapeId: arrowId,
-      outputLocalPath: providerOutputLocalPath,
-      outputMediaType,
-      generationMode: options.generationMode,
-      createdAt: generatedAt,
-    })
-    const generationRequest = GenerateMediaActionUtil.toGenerationRequest(generateMediaAction)
-
-    editor.run(() => {
-      editor.createShapes([
-        {
-          id: childId,
-          type: MEDIA_IMAGE_SHAPE,
-          x: placement.childBounds.x,
-          y: placement.childBounds.y,
-          props: {
-            w: placement.childBounds.w,
-            h: placement.childBounds.h,
-            assetId: `asset:generated-${generatedAt}`,
-            versionId: `version:generated-${generatedAt}`,
-            localPath: canvasPreviewLocalPath,
-            src: generatingPlaceholderSvg(generationRequest.provider, outputMediaType),
-            title: 'Generating preview',
-            prompt: generationRequest.instructions.prompt,
-            provider: generationRequest.provider,
-            model: '',
-            generationMode: generationRequest.generationMode,
-            requestId: generationRequest.id,
-            executionId: '',
-            status: 'processing',
-            skillName: 'codex-media-generation',
-          },
-        } satisfies Partial<MediaImageShape>,
-        {
-          id: arrowId,
-          type: 'arrow',
-          x: 0,
-          y: 0,
-          props: {
-            start: { x: placement.lineageArrow.start.x, y: placement.lineageArrow.start.y },
-            end: { x: placement.lineageArrow.end.x, y: placement.lineageArrow.end.y },
-            bend: 0,
-            dash: 'draw',
-            size: 'm',
-            fill: 'none',
-            color: 'blue',
-            arrowheadStart: 'none',
-            arrowheadEnd: 'arrow',
-            richText: toRichText(''),
-            labelPosition: 0.5,
-          },
-        },
-      ])
-      editor.createBindings([
-        {
-          id: createBindingId(),
-          type: 'arrow',
-          fromId: arrowId,
-          toId: parentShapeId,
-          props: {
-            terminal: 'start',
-            normalizedAnchor: { x: 1, y: 0.5 },
-            isExact: false,
-            isPrecise: true,
-          },
-        },
-        {
-          id: createBindingId(),
-          type: 'arrow',
-          fromId: arrowId,
-          toId: childId,
-          props: {
-            terminal: 'end',
-            normalizedAnchor: { x: 0, y: 0.5 },
-            isExact: false,
-            isPrecise: true,
-          },
-        },
-      ])
-      editor.select(childId)
-    })
-
     await publishFrameContext(context)
-    await publishGenerationRequest(generationRequest)
-    const execution = await runLatestGenerationRequest()
-    if (execution) {
-      const title =
-        execution.status === 'processing'
-          ? execution.output.mediaType === 'video'
-            ? 'Rendering video'
-            : 'Generating image'
-          : execution.status === 'failed'
-            ? 'Generation failed'
-            : execution.mockFallback
-              ? execution.output.mediaType === 'video'
-                ? 'Mock fallback video preview'
-                : 'Mock fallback image'
-              : execution.output.mediaType === 'video'
-                ? 'Generated video output'
-                : 'Generated image output'
-      const model = execution.externalExecution?.request?.model ?? stringFromUnknown(execution.selectedProviderPayload?.model)
-      const generationMode = execution.providerJob?.mode ?? generationRequest.generationMode
-      editor.updateShapes([
-        {
-          id: childId,
-          type: MEDIA_IMAGE_SHAPE,
-          props: {
-            localPath: execution.output.localPath,
-            src: execution.preview.src,
-            title,
-            provider: execution.provider,
-            model: model ?? '',
-            generationMode,
-            requestId: execution.requestId,
-            executionId: execution.id,
-            status: execution.status,
-            skillName: 'codex-media-generation',
-          },
-        } satisfies TLShapePartial<MediaImageShape>,
-      ])
-      setSelectedMediaInfo(getSelectedMediaInfo(editor))
-    }
+    const promptPart = buildBoundedFrameContextPromptPart(context, 'canvas-frame-action')
     await recordOperation({
-      type: 'version.created',
+      type: 'codex.frame_context_sent',
       frameId: context.frameId,
-      requestedFrameId: frameId,
-      parentShapeId,
-      childShapeId: childId,
-      arrowShapeId: arrowId,
       promptPart,
-      generateMediaAction,
-      generationRequestId: generationRequest.id,
-      provider: generationRequest.provider,
-      executionId: execution?.id,
       skillName: 'codex-media-generation',
-      promptSource: options.prompt ? 'codex-agent-bridge' : 'canvas-frame-action',
+      promptSource: 'canvas-frame-action',
     })
-    showStatus(
-      execution?.status === 'processing'
-        ? `${generationRequest.provider} is still generating; kept a non-final preview`
-        : execution?.status === 'failed'
-          ? `${generationRequest.provider} generation failed; kept a failed-state preview`
-          : `Executed ${generationRequest.generationMode} request and updated child preview`,
-      execution?.status === 'processing' ? 5200 : 3200
-    )
+    showStatus(`Sent frame context to Codex: ${context.media.length} media + ${context.annotations.length} annotations`, 4200)
   }
 
   return (
@@ -366,7 +149,7 @@ export default function App() {
       ) : null}
       {selectedMediaInfo ? <MediaInfoPanel info={selectedMediaInfo} /> : null}
       {uploadProgress ? <UploadProgress progress={uploadProgress} /> : null}
-      {frameAction ? <FrameGenerateAction action={frameAction} onGenerate={queueFrameGenerate} /> : null}
+      {frameAction ? <FrameCodexAction action={frameAction} onSend={sendFrameToCodex} /> : null}
     </div>
   )
 }
@@ -405,7 +188,7 @@ function MediaInfoPanel({ info }: { info: NonNullable<SelectedMediaInfo> }) {
   )
 }
 
-function FrameGenerateAction({ action, onGenerate }: { action: NonNullable<FrameActionState>; onGenerate: (frameId: string) => void }) {
+function FrameCodexAction({ action, onSend }: { action: NonNullable<FrameActionState>; onSend: (frameId: string) => void }) {
   function keepPrimaryPointerOnButton(event: PointerEvent<HTMLButtonElement> | MouseEvent<HTMLButtonElement>) {
     if ('button' in event && event.button !== 0) return
     event.stopPropagation()
@@ -423,9 +206,9 @@ function FrameGenerateAction({ action, onGenerate }: { action: NonNullable<Frame
       onClick={(event) => {
         event.preventDefault()
         event.stopPropagation()
-        onGenerate(action.frameId)
+        onSend(action.frameId)
       }}
-      title={`Generate from ${action.frameName}`}
+      title={`Send ${action.frameName} context to Codex`}
     >
       <span className="frame-action-button__icon" aria-hidden="true">
         <svg viewBox="0 0 16 16" focusable="false">
@@ -433,7 +216,7 @@ function FrameGenerateAction({ action, onGenerate }: { action: NonNullable<Frame
           <path d="M3.7 10.1 4.4 12l1.9.7-1.9.8-.7 1.8-.8-1.8-1.8-.8 1.8-.7.8-1.9Z" />
         </svg>
       </span>
-      <span>Generate</span>
+      <span>Send to Codex</span>
     </button>
   )
 }
@@ -1040,32 +823,6 @@ function sourceImageSvg() {
       <circle cx="530" cy="144" r="44" fill="#f97316"/>
       <text x="70" y="74" fill="#e2e8f0" font-family="Inter,Arial" font-size="34" font-weight="700">Source product</text>
       <text x="70" y="420" fill="#cbd5e1" font-family="Inter,Arial" font-size="24">Frame + annotations should scope the task</text>
-    </svg>
-  `)
-}
-
-function generatingPlaceholderSvg(provider: string, mediaType: OutputMediaType) {
-  void provider
-  const outputLabel = mediaType === 'video' ? 'Rendering motion' : 'Composing image'
-  return svgDataUrl(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480">
-      <defs>
-        <linearGradient id="shimmer" x1="-1" x2="1" y1="0" y2="0">
-          <stop offset="0" stop-color="#f1f5f9"/>
-          <stop offset="0.45" stop-color="#ffffff"/>
-          <stop offset="1" stop-color="#e5e7eb"/>
-          <animate attributeName="x1" values="-1;1" dur="1.35s" repeatCount="indefinite"/>
-          <animate attributeName="x2" values="0;2" dur="1.35s" repeatCount="indefinite"/>
-        </linearGradient>
-      </defs>
-      <rect width="720" height="480" rx="28" fill="#ffffff"/>
-      <rect x="1" y="1" width="718" height="478" rx="27" fill="none" stroke="#e5e7eb" stroke-width="2"/>
-      <rect x="76" y="72" width="568" height="274" rx="26" fill="url(#shimmer)"/>
-      <rect x="92" y="366" width="292" height="24" rx="12" fill="#eef2f7"/>
-      <rect x="92" y="406" width="190" height="18" rx="9" fill="#f3f4f6"/>
-      <circle cx="612" cy="410" r="20" fill="#eef2ff"/>
-      <path d="M607 409.5h10m-5-5v10" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
-      <text x="92" y="320" fill="#64748b" font-family="Inter,Arial" font-size="18" font-weight="600">${outputLabel}…</text>
     </svg>
   `)
 }

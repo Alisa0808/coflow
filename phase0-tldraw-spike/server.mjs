@@ -94,7 +94,7 @@ const server = createServer(async (request, response) => {
       return sendJson(response, {
         ok: true,
         command,
-        note: 'Queued Codex-style agent prompt. Keep the canvas browser open; it will claim the command and write back to the board.',
+        note: 'Queued a Codex-style agent prompt for the external Codex/Skill runtime. The canvas no longer auto-executes provider calls from this queue.',
       })
     }
 
