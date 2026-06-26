@@ -43,6 +43,7 @@ const MAX_ASSET_SIZE_BYTES = 2 * 1024 * 1024 * 1024
 const IMPORTED_MEDIA_INITIAL_DISPLAY_FIT = { w: 1280, h: 720 }
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 32 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024
+const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
 
 type FrameActionState = {
   frameId: string
@@ -110,7 +111,7 @@ export default function App() {
       if (stopped) return
 
       try {
-        const commands = await fetchPendingCommands('canvas.create_version')
+        const commands = await fetchPendingCommands('canvas.create_version', CANVAS_CLIENT_VERSION)
         for (const command of commands) {
           if (command.type === 'canvas.create_version') {
             await placeVersionFromCommand(command)

@@ -209,7 +209,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === '/api/commands/pending' && request.method === 'GET') {
-      const commands = await claimPendingCommands(url.searchParams.get('type'))
+      const commands = await claimPendingCommands(url.searchParams.get('type'), url.searchParams.get('clientVersion'))
       return sendJson(response, { ok: true, commands })
     }
 
@@ -433,7 +433,7 @@ function parseJsonHeader(value, fallback) {
   }
 }
 
-async function claimPendingCommands(type) {
+async function claimPendingCommands(type, clientVersion) {
   let raw = ''
   try {
     raw = await readFile(pendingCommandsPath, 'utf8')
@@ -446,13 +446,14 @@ async function claimPendingCommands(type) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line))
-  if (!type) {
-    await writeFile(pendingCommandsPath, '')
-    return commands
+  const canClaim = (command) => {
+    if (type && command.type !== type) return false
+    if (command.minClientVersion && command.minClientVersion !== clientVersion) return false
+    return true
   }
 
-  const claimed = commands.filter((command) => command.type === type)
-  const remaining = commands.filter((command) => command.type !== type)
+  const claimed = commands.filter(canClaim)
+  const remaining = commands.filter((command) => !canClaim(command))
   await writeFile(pendingCommandsPath, remaining.map((command) => JSON.stringify(command)).join('\n') + (remaining.length > 0 ? '\n' : ''))
   return claimed
 }
@@ -476,6 +477,7 @@ function createCommand(input) {
     model: input.model,
     status: input.status,
     skillName: input.skillName,
+    minClientVersion: input.minClientVersion,
   }
 }
 

@@ -166,8 +166,8 @@ function findOpenBounds(initial: Bounds, occupied: Bounds[], gap: number): Bound
   const horizontalStep = initial.w + gap
   const verticalStep = initial.h + 48
 
-  for (let column = 0; column < 8; column += 1) {
-    for (let row = 0; row < 8; row += 1) {
+  for (let row = 0; row < 4; row += 1) {
+    for (let column = 0; column < 10; column += 1) {
       const candidate = {
         ...initial,
         x: initial.x + column * horizontalStep,

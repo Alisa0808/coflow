@@ -9,6 +9,7 @@ const latestFrameContextPath = join(workspaceRoot, '.codex-media-canvas', 'metad
 const latestCodexFrameRequestPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-codex-frame-request.json')
 const commandsRoot = join(workspaceRoot, '.codex-media-canvas', 'commands')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
+const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
 
 const tools = [
   {
@@ -335,6 +336,7 @@ async function enqueueCanvasCommand(args, toolName) {
     model: args.model,
     status: args.status || (toolName === 'canvas.create_version' ? 'succeeded' : undefined),
     skillName: args.skillName || (toolName === 'canvas.create_version' ? 'codex-media-generation' : undefined),
+    minClientVersion: queuedType === 'canvas.create_version' ? CANVAS_CLIENT_VERSION : undefined,
   }
 
   await mkdir(commandsRoot, { recursive: true })

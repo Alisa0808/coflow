@@ -17,6 +17,7 @@ export type CanvasCommand = {
   model?: string
   status?: string
   skillName?: string
+  minClientVersion?: string
 }
 
 export type QueueAgentPromptInput = {
@@ -165,8 +166,12 @@ export async function recordOperation(operation: Record<string, unknown>) {
   })
 }
 
-export async function fetchPendingCommands(type?: CanvasCommand['type']): Promise<CanvasCommand[]> {
-  const response = await fetch(`/api/commands/pending${type ? `?type=${encodeURIComponent(type)}` : ''}`)
+export async function fetchPendingCommands(type?: CanvasCommand['type'], clientVersion?: string): Promise<CanvasCommand[]> {
+  const params = new URLSearchParams()
+  if (type) params.set('type', type)
+  if (clientVersion) params.set('clientVersion', clientVersion)
+  const query = params.toString()
+  const response = await fetch(`/api/commands/pending${query ? `?${query}` : ''}`)
   const payload = (await response.json()) as { commands?: CanvasCommand[] }
   return payload.commands ?? []
 }
