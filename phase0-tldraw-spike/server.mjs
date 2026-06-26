@@ -1,0 +1,838 @@
+import { createServer } from 'node:http'
+import { execFile } from 'node:child_process'
+import { mkdir, readFile, stat, writeFile, appendFile, readdir, rm } from 'node:fs/promises'
+import { basename, extname, join, normalize } from 'node:path'
+import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
+import { prepareProviderExecution } from './lib/provider-executor.mjs'
+
+const execFileAsync = promisify(execFile)
+
+const root = fileURLToPath(new URL('.', import.meta.url))
+const distRoot = join(root, 'dist')
+const workspaceRoot = process.env.WORKSPACE_ROOT || join(root, '..')
+const storeRoot = join(workspaceRoot, '.codex-media-canvas')
+const metadataRoot = join(storeRoot, 'metadata')
+const logsRoot = join(storeRoot, 'logs')
+const commandsRoot = join(storeRoot, 'commands')
+const assetsRoot = join(storeRoot, 'assets')
+const executionsRoot = join(storeRoot, 'executions')
+const uploadsRoot = join(storeRoot, 'uploads')
+const latestFrameContextPath = join(metadataRoot, 'latest-frame-context.json')
+const latestAgentPromptPath = join(metadataRoot, 'latest-agent-prompt.json')
+const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
+const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
+const operationsLogPath = join(logsRoot, 'operations.jsonl')
+const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
+
+await loadLocalEnv([join(workspaceRoot, '.env.local'), join(root, '.env.local'), join(workspaceRoot, '.env')])
+
+const port = Number(process.env.PORT || 5176)
+
+await mkdir(metadataRoot, { recursive: true })
+await mkdir(logsRoot, { recursive: true })
+await mkdir(commandsRoot, { recursive: true })
+await mkdir(assetsRoot, { recursive: true })
+await mkdir(executionsRoot, { recursive: true })
+await mkdir(uploadsRoot, { recursive: true })
+
+const server = createServer(async (request, response) => {
+  try {
+    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
+
+    if (url.pathname === '/api/frame-context' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      await writeJson(latestFrameContextPath, {
+        updatedAt: new Date().toISOString(),
+        source: 'phase0-tldraw-spike',
+        context: body,
+      })
+      await appendOperation({ type: 'frame-context.updated', context: body })
+      return sendJson(response, { ok: true })
+    }
+
+    if (url.pathname === '/api/frame-context' && request.method === 'GET') {
+      return sendJson(response, await readJsonFile(latestFrameContextPath, null))
+    }
+
+    if (url.pathname === '/api/operations' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      await appendOperation(body)
+      return sendJson(response, { ok: true })
+    }
+
+    if (url.pathname === '/api/generation-requests' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      await writeJson(latestGenerationRequestPath, {
+        updatedAt: new Date().toISOString(),
+        source: 'phase0-tldraw-spike',
+        request: body,
+      })
+      await appendOperation({ type: 'generation.requested', request: body })
+      return sendJson(response, { ok: true, request: body })
+    }
+
+    if (url.pathname === '/api/generation-requests/latest' && request.method === 'GET') {
+      return sendJson(response, await readJsonFile(latestGenerationRequestPath, null))
+    }
+
+    if (url.pathname === '/api/agent/prompt' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      const command = createCommand({
+        ...body,
+        type: 'canvas.agent_prompt',
+        source: body.source || 'codex-agent-bridge',
+        prompt: body.prompt || body.message,
+      })
+      await writeJson(latestAgentPromptPath, {
+        updatedAt: new Date().toISOString(),
+        source: command.source,
+        command,
+      })
+      await appendCommand(command)
+      await appendOperation({ type: 'agent.prompt.enqueued', command })
+      return sendJson(response, {
+        ok: true,
+        command,
+        note: 'Queued Codex-style agent prompt. Keep the canvas browser open; it will claim the command and write back to the board.',
+      })
+    }
+
+    if (url.pathname === '/api/agent/prompt/latest' && request.method === 'GET') {
+      return sendJson(response, await readJsonFile(latestAgentPromptPath, null))
+    }
+
+    if (url.pathname === '/api/executions/run-latest' && request.method === 'POST') {
+      const latest = await readJsonFile(latestGenerationRequestPath, null)
+      if (!latest?.request) return sendJson(response, { ok: false, error: 'No latest generation request found.' })
+      const result = await runGenerationExecutor(latest.request)
+      await writeJson(latestExecutionResultPath, {
+        updatedAt: new Date().toISOString(),
+        source: 'phase0-tldraw-spike',
+        result,
+      })
+      await appendOperation({ type: 'generation.executed', result })
+      return sendJson(response, { ok: true, result })
+    }
+
+    if (url.pathname === '/api/executions/latest' && request.method === 'GET') {
+      return sendJson(response, await readJsonFile(latestExecutionResultPath, null))
+    }
+
+    if (url.pathname === '/api/commands' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      const command = createCommand(body)
+      await appendCommand(command)
+      await appendOperation({ type: 'command.enqueued', command })
+      return sendJson(response, { ok: true, command })
+    }
+
+    if (url.pathname === '/api/commands/pending' && request.method === 'GET') {
+      const commands = await claimPendingCommands()
+      return sendJson(response, { ok: true, commands })
+    }
+
+    if (url.pathname === '/api/assets/materialize' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      const materialized = await materializeAsset(body)
+      await appendOperation({ type: 'asset.materialized', asset: materialized })
+      return sendJson(response, { ok: true, asset: materialized })
+    }
+
+    if (url.pathname === '/api/assets/upload' && request.method === 'POST') {
+      const uploaded = await uploadAsset(request)
+      await appendOperation({ type: 'asset.uploaded', asset: uploaded })
+      return sendJson(response, { ok: true, asset: uploaded })
+    }
+
+    if (url.pathname === '/api/assets/uploads/start' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      const upload = await startChunkedUpload(body)
+      await appendOperation({ type: 'asset.upload.started', upload })
+      return sendJson(response, { ok: true, upload })
+    }
+
+    if (url.pathname === '/api/assets/uploads/chunk' && request.method === 'POST') {
+      const chunk = await uploadAssetChunk(request)
+      return sendJson(response, { ok: true, chunk })
+    }
+
+    if (url.pathname === '/api/assets/uploads/complete' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      const uploaded = await completeChunkedUpload(body)
+      await appendOperation({ type: 'asset.upload.completed', asset: uploaded })
+      return sendJson(response, { ok: true, asset: uploaded })
+    }
+
+    if (url.pathname.startsWith('/asset-store/')) {
+      return serveStoreAsset(response, url.pathname)
+    }
+
+    await serveStatic(response, url.pathname)
+  } catch (error) {
+    response.writeHead(500, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+  }
+})
+
+server.on('error', (error) => {
+  if (error?.code === 'EADDRINUSE') {
+    console.error(`Port 127.0.0.1:${port} is already in use.`)
+    console.error(`Stop the old server first: lsof -nP -iTCP:${port} -sTCP:LISTEN`)
+    console.error(`Or start this server on another port: PORT=5177 npm run serve`)
+    process.exit(1)
+  }
+
+  if (error?.code === 'EPERM') {
+    console.error(`This process is not allowed to listen on 127.0.0.1:${port}.`)
+    console.error('Run the server from your local terminal, or grant the Codex sandbox permission to bind local ports.')
+    process.exit(1)
+  }
+
+  console.error(error)
+  process.exit(1)
+})
+
+server.listen(port, '127.0.0.1', () => {
+  console.log(`Phase 0 local server listening on http://127.0.0.1:${port}/`)
+  console.log(`Workspace store: ${storeRoot}`)
+  console.log(
+    process.env.ATLASCLOUD_API_KEY || process.env.ATLAS_PROVIDER_API_KEY || process.env.REAL_PROVIDER_API_KEY
+      ? 'Atlas provider key: configured'
+      : 'Atlas provider key: missing. Add ATLASCLOUD_API_KEY to .env.local or export it before npm run serve.',
+  )
+})
+
+async function loadLocalEnv(paths) {
+  for (const path of paths) {
+    let raw = ''
+    try {
+      raw = await readFile(path, 'utf8')
+    } catch {
+      continue
+    }
+
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) continue
+      const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+      if (!match) continue
+      const [, key, rawValue] = match
+      if (process.env[key] !== undefined) continue
+      process.env[key] = parseEnvValue(rawValue)
+    }
+
+    console.log(`Loaded local environment from ${path}`)
+  }
+}
+
+function parseEnvValue(rawValue) {
+  const value = rawValue.trim()
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1)
+  }
+  const commentIndex = value.indexOf(' #')
+  return commentIndex >= 0 ? value.slice(0, commentIndex).trim() : value
+}
+
+async function serveStatic(response, pathname) {
+  const safePath = normalize(pathname).replace(/^(\.\.[/\\])+/, '')
+  const candidate = join(distRoot, safePath === '/' ? 'index.html' : safePath)
+  const filePath = (await exists(candidate)) ? candidate : join(distRoot, 'index.html')
+  const content = await readFile(filePath)
+  response.writeHead(200, { 'content-type': contentType(filePath) })
+  response.end(content)
+}
+
+async function exists(path) {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function readJsonBody(request) {
+  const chunks = []
+  for await (const chunk of request) chunks.push(chunk)
+  const raw = Buffer.concat(chunks).toString('utf8')
+  return raw ? JSON.parse(raw) : {}
+}
+
+async function readJsonFile(path, fallback) {
+  try {
+    return JSON.parse(await readFile(path, 'utf8'))
+  } catch {
+    return fallback
+  }
+}
+
+async function writeJson(path, data) {
+  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`)
+}
+
+async function appendOperation(operation) {
+  await appendFile(
+    operationsLogPath,
+    `${JSON.stringify({
+      at: new Date().toISOString(),
+      ...operation,
+    })}\n`,
+  )
+}
+
+async function appendCommand(command) {
+  await appendFile(pendingCommandsPath, `${JSON.stringify(command)}\n`)
+}
+
+async function claimPendingCommands() {
+  let raw = ''
+  try {
+    raw = await readFile(pendingCommandsPath, 'utf8')
+  } catch {
+    return []
+  }
+
+  await writeFile(pendingCommandsPath, '')
+  return raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+}
+
+function createCommand(input) {
+  return {
+    id: input.id || `command:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    at: new Date().toISOString(),
+    source: input.source || 'browser-api',
+    type: input.type,
+    frameId: input.frameId,
+    prompt: input.prompt,
+    provider: input.provider,
+    outputMediaType: input.outputMediaType,
+    generationMode: input.generationMode,
+  }
+}
+
+async function materializeAsset(input) {
+  const mimeType = typeof input.mimeType === 'string' && input.mimeType ? input.mimeType : mimeTypeFromDataUrl(input.src)
+  const extension = extensionFromMimeType(mimeType)
+  const group = mimeType.startsWith('video/') ? 'videos' : 'images'
+  const assetId = sanitizeFilePart(input.assetId || `asset-${Date.now()}`)
+  const name = sanitizeFilePart(stripKnownExtension(input.name || assetId, extension))
+  const filename = `${assetId}-${name}.${extension}`
+  const absolutePath = join(assetsRoot, group, filename)
+  const localPath = `.codex-media-canvas/assets/${group}/${filename}`
+  const bytes = bytesFromDataUrl(input.src)
+
+  await mkdir(join(assetsRoot, group), { recursive: true })
+  await writeFile(absolutePath, bytes)
+
+  return {
+    assetId: input.assetId,
+    shapeId: input.shapeId,
+    mimeType,
+    localPath,
+    absolutePath,
+    bytes: bytes.length,
+  }
+}
+
+async function uploadAsset(request) {
+  const mimeType =
+    typeof request.headers['content-type'] === 'string' && request.headers['content-type']
+      ? request.headers['content-type'].split(';')[0]
+      : 'application/octet-stream'
+  const extension = extensionFromMimeType(mimeType)
+  const group = mimeType.startsWith('video/') ? 'videos' : 'images'
+  const assetId = sanitizeFilePart(request.headers['x-asset-id'] || `asset-${Date.now()}`)
+  const encodedName = typeof request.headers['x-file-name'] === 'string' ? request.headers['x-file-name'] : assetId
+  const decodedName = safeDecodeURIComponent(encodedName)
+  const name = sanitizeFilePart(stripKnownExtension(decodedName || assetId, extension))
+  const filename = `${assetId}-${Date.now()}-${name}.${extension}`
+  const absolutePath = join(assetsRoot, group, filename)
+  const localPath = `.codex-media-canvas/assets/${group}/${filename}`
+  const src = `/asset-store/assets/${group}/${filename}`
+  const bytes = await readRawBody(request)
+
+  await mkdir(join(assetsRoot, group), { recursive: true })
+  await writeFile(absolutePath, bytes)
+
+  return {
+    assetId,
+    mimeType,
+    src,
+    localPath,
+    absolutePath,
+    bytes: bytes.length,
+  }
+}
+
+async function startChunkedUpload(input) {
+  const mimeType = typeof input.mimeType === 'string' && input.mimeType ? input.mimeType : 'application/octet-stream'
+  const extension = extensionFromMimeType(mimeType)
+  const group = mimeType.startsWith('video/') ? 'videos' : 'images'
+  const assetId = sanitizeFilePart(input.assetId || `asset-${Date.now()}`)
+  const name = sanitizeFilePart(stripKnownExtension(input.name || assetId, extension))
+  const uploadId = sanitizeFilePart(`upload-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const filename = `${assetId}-${Date.now()}-${name}.${extension}`
+  const uploadRoot = join(uploadsRoot, uploadId)
+  const manifest = {
+    uploadId,
+    assetId,
+    mimeType,
+    group,
+    filename,
+    expectedBytes: Number(input.size || 0),
+    chunkSize: Number(input.chunkSize || 0),
+    createdAt: new Date().toISOString(),
+  }
+
+  await mkdir(uploadRoot, { recursive: true })
+  await writeJson(join(uploadRoot, 'manifest.json'), manifest)
+
+  return manifest
+}
+
+async function uploadAssetChunk(request) {
+  const uploadId = sanitizeFilePart(request.headers['x-upload-id'])
+  const chunkIndex = Number(request.headers['x-chunk-index'])
+  if (!uploadId || !Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    throw new Error('Invalid upload chunk headers.')
+  }
+  const uploadRoot = join(uploadsRoot, uploadId)
+  const manifest = await readJsonFile(join(uploadRoot, 'manifest.json'), null)
+  if (!manifest) throw new Error(`Upload not found: ${uploadId}`)
+  const bytes = await readRawBody(request)
+  const chunkPath = join(uploadRoot, `${String(chunkIndex).padStart(8, '0')}.part`)
+  await writeFile(chunkPath, bytes)
+  return {
+    uploadId,
+    chunkIndex,
+    bytes: bytes.length,
+  }
+}
+
+async function completeChunkedUpload(input) {
+  const uploadId = sanitizeFilePart(input.uploadId)
+  const uploadRoot = join(uploadsRoot, uploadId)
+  const manifest = await readJsonFile(join(uploadRoot, 'manifest.json'), null)
+  if (!manifest) throw new Error(`Upload not found: ${uploadId}`)
+
+  const absolutePath = join(assetsRoot, manifest.group, manifest.filename)
+  const localPath = `.codex-media-canvas/assets/${manifest.group}/${manifest.filename}`
+  const src = `/asset-store/assets/${manifest.group}/${manifest.filename}`
+  await mkdir(join(assetsRoot, manifest.group), { recursive: true })
+
+  const chunks = (await readdir(uploadRoot))
+    .filter((name) => name.endsWith('.part'))
+    .sort()
+  if (chunks.length === 0) throw new Error(`No chunks found for upload: ${uploadId}`)
+
+  await writeFile(absolutePath, '')
+  let bytes = 0
+  for (const chunkName of chunks) {
+    const chunk = await readFile(join(uploadRoot, chunkName))
+    bytes += chunk.length
+    await appendFile(absolutePath, chunk)
+  }
+  await rm(uploadRoot, { recursive: true, force: true })
+
+  return {
+    assetId: manifest.assetId,
+    mimeType: manifest.mimeType,
+    src,
+    localPath,
+    absolutePath,
+    bytes,
+    uploadId,
+    chunkCount: chunks.length,
+  }
+}
+
+async function serveStoreAsset(response, pathname) {
+  const relative = normalize(pathname.replace(/^\/asset-store\//, '')).replace(/^(\.\.[/\\])+/, '')
+  if (!relative.startsWith('assets/')) {
+    response.writeHead(404)
+    response.end('Not found')
+    return
+  }
+  const filePath = join(storeRoot, relative)
+  const content = await readFile(filePath)
+  response.writeHead(200, { 'content-type': contentType(filePath) })
+  response.end(content)
+}
+
+async function readRawBody(request) {
+  const chunks = []
+  for await (const chunk of request) chunks.push(chunk)
+  return Buffer.concat(chunks)
+}
+
+async function runGenerationExecutor(request) {
+  const providerExecution = await prepareProviderExecution(request)
+  const { providerJob, providerPayloads, selectedProvider, selectedProviderPayload, externalExecution } = providerExecution
+  const outputMediaType = request.output?.mediaType === 'video' ? 'video' : 'image'
+  const outputLocalPath =
+    typeof request.output?.localPath === 'string'
+      ? request.output.localPath
+      : outputMediaType === 'video'
+        ? `.codex-media-canvas/assets/videos/${request.id}.mp4`
+        : `.codex-media-canvas/assets/images/${request.id}.svg`
+  const outputAbsolutePath = resolveStoreLocalPath(outputLocalPath)
+  const previewSvg = mockPreviewSvg(request)
+  const previewLocalPath = `.codex-media-canvas/assets/images/${sanitizeFilePart(request.id)}-preview.svg`
+  const previewAbsolutePath = resolveStoreLocalPath(previewLocalPath)
+  const processingPreviewSvg = providerStatePreviewSvg(request, 'processing')
+  const processingPreviewLocalPath = `.codex-media-canvas/assets/images/${sanitizeFilePart(request.id)}-processing.svg`
+  const processingPreviewAbsolutePath = resolveStoreLocalPath(processingPreviewLocalPath)
+  const failedPreviewSvg = providerStatePreviewSvg(request, 'failed')
+  const failedPreviewLocalPath = `.codex-media-canvas/assets/images/${sanitizeFilePart(request.id)}-failed.svg`
+  const failedPreviewAbsolutePath = resolveStoreLocalPath(failedPreviewLocalPath)
+
+  await mkdir(join(assetsRoot, outputMediaType === 'video' ? 'videos' : 'images'), { recursive: true })
+  await mkdir(join(assetsRoot, 'images'), { recursive: true })
+
+  if (outputMediaType === 'video') {
+    await writeMockVideo(outputAbsolutePath)
+  } else {
+    await writeFile(outputAbsolutePath, previewSvg)
+  }
+  await writeFile(previewAbsolutePath, previewSvg)
+  await writeFile(processingPreviewAbsolutePath, processingPreviewSvg)
+  await writeFile(failedPreviewAbsolutePath, failedPreviewSvg)
+
+  const materializedProviderOutput = await materializeProviderOutputIfAvailable({
+    externalExecution,
+    outputMediaType,
+    fallbackLocalPath: outputLocalPath,
+    fallbackAbsolutePath: outputAbsolutePath,
+    fallbackPreviewLocalPath: previewLocalPath,
+    fallbackPreviewAbsolutePath: previewAbsolutePath,
+    fallbackPreviewSrc: svgDataUrl(previewSvg),
+  })
+  const providerWasSkipped = externalExecution?.status === 'skipped'
+  const providerStillProcessing = externalExecution?.status === 'processing'
+  const providerFailed = externalExecution?.status === 'failed'
+  const providerDownloadFailed = materializedProviderOutput.providerOutput?.materialized === false
+  const usedMockFallback = !materializedProviderOutput.providerOutput && providerWasSkipped
+  const executionStatus =
+    providerStillProcessing ? 'processing' : providerFailed || providerDownloadFailed ? 'failed' : 'succeeded'
+  const preview =
+    providerStillProcessing
+      ? {
+          localPath: processingPreviewLocalPath,
+          absolutePath: processingPreviewAbsolutePath,
+          src: svgDataUrl(processingPreviewSvg),
+        }
+      : providerFailed || providerDownloadFailed
+        ? {
+            localPath: failedPreviewLocalPath,
+            absolutePath: failedPreviewAbsolutePath,
+            src: svgDataUrl(failedPreviewSvg),
+          }
+        : materializedProviderOutput.preview
+  const executionNote = materializedProviderOutput.providerOutput?.materialized
+    ? 'Provider output was materialized into the local canvas asset store.'
+    : providerStillProcessing
+      ? `${selectedProvider} is still processing; keeping a non-final generation placeholder instead of writing mock output.`
+      : providerFailed
+        ? `${selectedProvider} failed before producing an output; keeping a failed-state preview instead of writing mock output.`
+        : providerDownloadFailed
+          ? `${selectedProvider} produced an output URL but local materialization failed.`
+          : providerWasSkipped
+            ? `${selectedProvider} was skipped because it is not configured; wrote a local mock fallback.`
+            : outputMediaType === 'video'
+              ? 'Generation executor wrote a short local mock fallback MP4 plus SVG preview.'
+              : 'Generation executor wrote a local mock fallback SVG output.'
+
+  const result = {
+    id: `execution:${Date.now()}`,
+    requestId: request.id,
+    provider: request.provider || 'mock-provider',
+    status: executionStatus,
+    selectedProvider,
+    providerJob,
+    providerPayloads,
+    selectedProviderPayload,
+    externalExecution,
+    mockFallback: usedMockFallback,
+    output: {
+      mediaType: outputMediaType,
+      localPath: materializedProviderOutput.output.localPath,
+      absolutePath: materializedProviderOutput.output.absolutePath,
+    },
+    preview: {
+      localPath: preview.localPath,
+      absolutePath: preview.absolutePath,
+      src: preview.src,
+    },
+    providerOutput: materializedProviderOutput.providerOutput,
+    note: executionNote,
+  }
+
+  await writeJson(join(executionsRoot, `${sanitizeFilePart(result.id)}.json`), result)
+  return result
+}
+
+async function materializeProviderOutputIfAvailable(args) {
+  const outputUrl = args.externalExecution?.outputUrl || args.externalExecution?.outputs?.[0]
+  if (!outputUrl || args.externalExecution?.status !== 'succeeded') {
+    return {
+      output: {
+        localPath: args.fallbackLocalPath,
+        absolutePath: args.fallbackAbsolutePath,
+      },
+      preview: {
+        localPath: args.fallbackPreviewLocalPath,
+        absolutePath: args.fallbackPreviewAbsolutePath,
+        src: args.fallbackPreviewSrc,
+      },
+      providerOutput: null,
+    }
+  }
+
+  const response = await fetch(outputUrl)
+  if (!response.ok) {
+    return {
+      output: {
+        localPath: args.fallbackLocalPath,
+        absolutePath: args.fallbackAbsolutePath,
+      },
+      preview: {
+        localPath: args.fallbackPreviewLocalPath,
+        absolutePath: args.fallbackPreviewAbsolutePath,
+        src: args.fallbackPreviewSrc,
+      },
+      providerOutput: {
+        url: outputUrl,
+        materialized: false,
+        error: `Download failed with HTTP ${response.status}`,
+      },
+    }
+  }
+
+  const contentTypeHeader = response.headers.get('content-type') || ''
+  const extension = extensionFromContentTypeOrUrl(contentTypeHeader, outputUrl, args.outputMediaType)
+  const group = args.outputMediaType === 'video' ? 'videos' : 'images'
+  const fileName = `atlas-output-${Date.now()}.${extension}`
+  const localPath = `.codex-media-canvas/assets/${group}/${fileName}`
+  const absolutePath = join(assetsRoot, group, fileName)
+  const bytes = Buffer.from(await response.arrayBuffer())
+
+  await mkdir(join(assetsRoot, group), { recursive: true })
+  await writeFile(absolutePath, bytes)
+
+  const preview =
+    args.outputMediaType === 'image'
+      ? {
+          localPath,
+          absolutePath,
+          src: `/asset-store/assets/${group}/${fileName}`,
+        }
+      : {
+          localPath: args.fallbackPreviewLocalPath,
+          absolutePath: args.fallbackPreviewAbsolutePath,
+          src: args.fallbackPreviewSrc,
+        }
+
+  return {
+    output: {
+      localPath,
+      absolutePath,
+    },
+    preview,
+    providerOutput: {
+      url: outputUrl,
+      materialized: true,
+      localPath,
+      absolutePath,
+      contentType: contentTypeHeader,
+      bytes: bytes.length,
+    },
+  }
+}
+
+async function writeMockVideo(outputAbsolutePath) {
+  try {
+    await execFileAsync('/opt/homebrew/bin/ffmpeg', [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=0x111827:s=1280x720:d=3:r=24',
+      '-pix_fmt',
+      'yuv420p',
+      outputAbsolutePath,
+    ])
+  } catch (error) {
+    await writeFile(`${outputAbsolutePath}.mock.txt`, `Mock video generation failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    throw error
+  }
+}
+
+function resolveStoreLocalPath(localPath) {
+  if (typeof localPath !== 'string' || !localPath.startsWith('.codex-media-canvas/')) {
+    throw new Error(`Unsafe local output path: ${localPath}`)
+  }
+  const relative = localPath.replace(/^\.codex-media-canvas\//, '')
+  return join(storeRoot, relative)
+}
+
+function mockPreviewSvg(request) {
+  const title = request.output?.mediaType === 'video' ? 'Mock video output' : 'Mock image output'
+  const mode = request.generationMode || request.kind || 'generation'
+  const prompt = request.instructions?.prompt || 'No prompt'
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+      <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+          <stop stop-color="#0f172a"/>
+          <stop offset="1" stop-color="#312e81"/>
+        </linearGradient>
+      </defs>
+      <rect width="1280" height="720" rx="48" fill="url(#bg)"/>
+      <text x="72" y="116" fill="#f8fafc" font-family="Inter, Arial" font-size="54" font-weight="700">${escapeXml(title)}</text>
+      <text x="72" y="184" fill="#93c5fd" font-family="Inter, Arial" font-size="28">mode: ${escapeXml(mode)}</text>
+      <text x="72" y="640" fill="#dbeafe" font-family="Inter, Arial" font-size="24">${escapeXml(prompt).slice(0, 140)}</text>
+    </svg>
+  `.trim()
+}
+
+function providerStatePreviewSvg(request, state) {
+  const isFailed = state === 'failed'
+  const mediaType = request.output?.mediaType === 'video' ? 'video' : 'image'
+  const title = isFailed ? 'Generation needs attention' : mediaType === 'video' ? 'Rendering motion' : 'Composing image'
+  const subtitle = isFailed ? 'The provider did not return a usable result.' : 'Waiting for the provider result.'
+  const accent = isFailed ? '#ef4444' : '#2563eb'
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480">
+      <defs>
+        <linearGradient id="shimmer" x1="-1" x2="1" y1="0" y2="0">
+          <stop offset="0" stop-color="#f1f5f9"/>
+          <stop offset="0.45" stop-color="#ffffff"/>
+          <stop offset="1" stop-color="#e5e7eb"/>
+          <animate attributeName="x1" values="-1;1" dur="1.35s" repeatCount="indefinite"/>
+          <animate attributeName="x2" values="0;2" dur="1.35s" repeatCount="indefinite"/>
+        </linearGradient>
+      </defs>
+      <rect width="720" height="480" rx="28" fill="#ffffff"/>
+      <rect x="1" y="1" width="718" height="478" rx="27" fill="none" stroke="#e5e7eb" stroke-width="2"/>
+      ${
+        isFailed
+          ? `<circle cx="360" cy="190" r="48" fill="#fef2f2"/>
+             <path d="M360 158v42" stroke="${accent}" stroke-width="10" stroke-linecap="round"/>
+             <circle cx="360" cy="226" r="6" fill="${accent}"/>`
+          : `<rect x="76" y="72" width="568" height="274" rx="26" fill="url(#shimmer)"/>
+             <rect x="92" y="366" width="292" height="24" rx="12" fill="#eef2f7"/>
+             <rect x="92" y="406" width="190" height="18" rx="9" fill="#f3f4f6"/>
+             <circle cx="612" cy="410" r="20" fill="#eef2ff"/>
+             <path d="M607 409.5h10m-5-5v10" stroke="${accent}" stroke-width="3" stroke-linecap="round"/>`
+      }
+      <text x="360" y="${isFailed ? 304 : 320}" fill="#111827" font-family="Inter,Arial" font-size="24" font-weight="650" text-anchor="middle">${escapeXml(title)}</text>
+      <text x="360" y="${isFailed ? 340 : 354}" fill="#64748b" font-family="Inter,Arial" font-size="16" text-anchor="middle">${escapeXml(subtitle)}</text>
+    </svg>
+  `.trim()
+}
+
+function svgDataUrl(svg) {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+function escapeXml(value) {
+  return String(value).replace(/[<>&"']/g, (char) => {
+    if (char === '<') return '&lt;'
+    if (char === '>') return '&gt;'
+    if (char === '&') return '&amp;'
+    if (char === '"') return '&quot;'
+    return '&apos;'
+  })
+}
+
+function bytesFromDataUrl(src) {
+  if (typeof src !== 'string' || !src.startsWith('data:')) {
+    throw new Error('Asset materialization requires a data URL payload.')
+  }
+  const comma = src.indexOf(',')
+  if (comma < 0) throw new Error('Invalid data URL payload.')
+  const metadata = src.slice(0, comma)
+  const payload = src.slice(comma + 1)
+  return metadata.endsWith(';base64') ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload), 'utf8')
+}
+
+function mimeTypeFromDataUrl(src) {
+  if (typeof src !== 'string') return 'application/octet-stream'
+  const match = src.match(/^data:([^;,]+)/)
+  return match?.[1] || 'application/octet-stream'
+}
+
+function extensionFromMimeType(mimeType) {
+  if (mimeType === 'image/jpeg') return 'jpg'
+  if (mimeType === 'image/png') return 'png'
+  if (mimeType === 'image/webp') return 'webp'
+  if (mimeType === 'image/gif') return 'gif'
+  if (mimeType === 'image/svg+xml') return 'svg'
+  if (mimeType === 'video/mp4') return 'mp4'
+  if (mimeType === 'video/webm') return 'webm'
+  if (mimeType === 'video/quicktime') return 'mov'
+  return 'bin'
+}
+
+function extensionFromContentTypeOrUrl(contentTypeHeader, url, outputMediaType) {
+  const contentTypeExtension = extensionFromMimeType(contentTypeHeader.split(';')[0])
+  if (contentTypeExtension !== 'bin') return contentTypeExtension
+
+  const pathname = (() => {
+    try {
+      return new URL(url).pathname
+    } catch {
+      return String(url)
+    }
+  })()
+  const extension = extname(pathname).replace(/^\./, '').toLowerCase()
+  if (extension) return extension
+  return outputMediaType === 'video' ? 'mp4' : 'png'
+}
+
+function sanitizeFilePart(value) {
+  return basename(String(value))
+    .replace(/^asset:/, '')
+    .replace(/^shape:/, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+}
+
+function stripKnownExtension(value, extension) {
+  const text = String(value)
+  const suffix = `.${extension}`
+  return text.toLowerCase().endsWith(suffix.toLowerCase()) ? text.slice(0, -suffix.length) : text
+}
+
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(String(value))
+  } catch {
+    return String(value)
+  }
+}
+
+function sendJson(response, data) {
+  response.writeHead(200, { 'content-type': 'application/json' })
+  response.end(JSON.stringify(data, null, 2))
+}
+
+function contentType(path) {
+  const ext = extname(path)
+  if (ext === '.html') return 'text/html; charset=utf-8'
+  if (ext === '.js') return 'text/javascript; charset=utf-8'
+  if (ext === '.css') return 'text/css; charset=utf-8'
+  if (ext === '.svg') return 'image/svg+xml'
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.mp4') return 'video/mp4'
+  if (ext === '.webm') return 'video/webm'
+  return 'application/octet-stream'
+}

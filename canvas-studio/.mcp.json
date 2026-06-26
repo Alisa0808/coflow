@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "codex-media-canvas": {
+      "command": "node",
+      "args": ["mcp-server.mjs"],
+      "cwd": ".",
+      "env": {
+        "WORKSPACE_ROOT": "."
+      }
+    }
+  }
+}
