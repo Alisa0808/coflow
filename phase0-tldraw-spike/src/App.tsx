@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
-import { Tldraw, createShapeId, toRichText, type Editor, type TLAsset, type TLAssetStore, type TLShape, type TLShapeId, type TLShapePartial } from 'tldraw'
+import { StateNode, Tldraw, createShapeId, toRichText, type Editor, type TLAsset, type TLAssetStore, type TLShape, type TLShapeId, type TLShapePartial } from 'tldraw'
 import { buildBoundedFrameContextPromptPart } from './agentPromptParts'
 import {
   createVersionPlacement,
@@ -36,6 +36,11 @@ const CHUNKED_UPLOAD_THRESHOLD_BYTES = 32 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024
 const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
 const DEFAULT_ARROW_BEND = 20
+const FLOATING_ARROW_META_KEY = 'codexFloatingArrow'
+const FLOATING_ARROW_MIN_LENGTH = 8
+const FLOATING_ARROW_BEND_RATIO = 0.12
+const FLOATING_ARROW_MIN_BEND = 12
+const FLOATING_ARROW_MAX_BEND = 32
 
 type FrameActionState = {
   frameId: string
@@ -69,6 +74,161 @@ type FrameScreenshotResult = {
   clipboardCopied: boolean
   screenshot?: FrameScreenshot
   error?: string
+}
+
+class FloatingArrowTool extends StateNode {
+  static id = 'arrow'
+  static initial = 'idle'
+
+  static children() {
+    return [FloatingArrowIdle, FloatingArrowPointing]
+  }
+}
+
+class FloatingArrowIdle extends StateNode {
+  static id = 'idle'
+
+  onEnter() {
+    this.editor.setCursor({ type: 'cross', rotation: 0 })
+  }
+
+  onPointerDown(info: unknown) {
+    this.parent.transition('pointing', info)
+  }
+
+  onCancel() {
+    this.editor.setCurrentTool('select')
+  }
+}
+
+class FloatingArrowPointing extends StateNode {
+  static id = 'pointing'
+
+  private arrowId: TLShapeId | null = null
+  private markId = ''
+  private origin: { x: number; y: number } | null = null
+
+  onEnter() {
+    const origin = this.editor.inputs.getOriginPagePoint()
+    const arrowId = createShapeId()
+    this.arrowId = arrowId
+    this.origin = { x: origin.x, y: origin.y }
+    this.markId = this.editor.markHistoryStoppingPoint(`creating_floating_arrow:${arrowId}`)
+
+    this.editor.createShape({
+      id: arrowId,
+      type: 'arrow',
+      x: origin.x,
+      y: origin.y,
+      meta: {
+        [FLOATING_ARROW_META_KEY]: true,
+      },
+      props: {
+        kind: 'arc',
+        dash: 'draw',
+        size: 'm',
+        fill: 'none',
+        color: 'black',
+        labelColor: 'black',
+        bend: 0,
+        start: { x: 0, y: 0 },
+        end: { x: 1, y: 0 },
+        arrowheadStart: 'none',
+        arrowheadEnd: 'arrow',
+        richText: toRichText(''),
+        labelPosition: 0.5,
+        font: 'draw',
+        scale: this.editor.getResizeScaleFactor(),
+      },
+    })
+  }
+
+  onPointerMove() {
+    this.updateArrowEnd()
+  }
+
+  onPointerUp() {
+    this.complete()
+  }
+
+  onCancel() {
+    this.cancel()
+  }
+
+  onInterrupt() {
+    this.cancel()
+  }
+
+  private updateArrowEnd() {
+    if (!this.arrowId || !this.origin) return
+
+    const point = this.editor.inputs.getCurrentPagePoint()
+    this.editor.updateShapes([
+      {
+        id: this.arrowId,
+        type: 'arrow',
+        props: {
+          end: {
+            x: point.x - this.origin.x,
+            y: point.y - this.origin.y,
+          },
+        },
+      },
+    ])
+  }
+
+  private complete() {
+    if (!this.arrowId || !this.origin) {
+      this.parent.transition('idle')
+      return
+    }
+
+    this.updateArrowEnd()
+
+    const point = this.editor.inputs.getCurrentPagePoint()
+    const dx = point.x - this.origin.x
+    const dy = point.y - this.origin.y
+    const length = Math.hypot(dx, dy)
+
+    if (length < FLOATING_ARROW_MIN_LENGTH / this.editor.getZoomLevel()) {
+      this.editor.bailToMark(this.markId)
+      this.parent.transition('idle')
+      return
+    }
+
+    this.editor.updateShapes([
+      {
+        id: this.arrowId,
+        type: 'arrow',
+        props: {
+          bend: getFloatingArrowBend(dx, dy, this.editor.getResizeScaleFactor()),
+        },
+      },
+    ])
+    this.editor.select(this.arrowId)
+    this.parent.transition('idle')
+  }
+
+  private cancel() {
+    if (this.arrowId) this.editor.bailToMark(this.markId)
+    this.parent.transition('idle')
+  }
+}
+
+function getFloatingArrowBend(dx: number, dy: number, scale: number) {
+  const length = Math.hypot(dx, dy)
+  if (length === 0) return 0
+
+  const bend = Math.min(
+    Math.max(length * FLOATING_ARROW_BEND_RATIO, FLOATING_ARROW_MIN_BEND * scale),
+    FLOATING_ARROW_MAX_BEND * scale
+  )
+
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? -bend : bend
+  }
+
+  return bend
 }
 
 export default function App() {
@@ -134,6 +294,7 @@ export default function App() {
     editorRef.current = editor
     const disposeDefaultArrow = editor.store.sideEffects.registerBeforeCreateHandler('shape', (shape) => {
       if (shape.type !== 'arrow') return shape
+      if (shape.meta?.[FLOATING_ARROW_META_KEY] === true) return shape
       const props = shape.props as unknown as { bend?: number }
       if (typeof props.bend === 'number' && props.bend !== 0) return shape
       return {
@@ -458,6 +619,7 @@ export default function App() {
       <div className="canvas">
         <Tldraw
           shapeUtils={shapeUtils}
+          tools={[FloatingArrowTool]}
           onMount={onMount}
           assets={assetStore}
           maxAssetSize={MAX_ASSET_SIZE_BYTES}
