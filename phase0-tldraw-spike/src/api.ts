@@ -56,6 +56,7 @@ export type CodexFrameRequestInput = {
     anchorMediaId?: string
     annotationTexts?: string[]
   }
+  frameScreenshot?: FrameScreenshot
   recommendedUserPrompt?: string
 }
 
@@ -69,6 +70,16 @@ export type CodexFrameRequest = CodexFrameRequestInput & {
     localPath: string
     absolutePath: string
   }
+}
+
+export type FrameScreenshot = {
+  fileName: string
+  mimeType: 'image/png'
+  localPath: string
+  absolutePath: string
+  frameId: string
+  frameName?: string
+  bytes: number
 }
 
 export type ExecutionResult = {
@@ -127,6 +138,21 @@ export async function publishCodexFrameRequest(request: CodexFrameRequestInput) 
   const payload = (await response.json()) as { ok: boolean; request?: CodexFrameRequest; error?: string }
   if (!payload.ok) throw new Error(payload.error ?? 'Failed to publish Codex frame request.')
   return payload.request
+}
+
+export async function saveFrameScreenshot(input: { frameId: string; frameName?: string; blob: Blob }): Promise<FrameScreenshot> {
+  const response = await fetch('/api/codex/frame-screenshots', {
+    method: 'POST',
+    headers: {
+      'content-type': input.blob.type || 'image/png',
+      'x-frame-id': input.frameId,
+      'x-frame-name': encodeURIComponent(input.frameName ?? ''),
+    },
+    body: input.blob,
+  })
+  const payload = (await response.json()) as { ok: boolean; screenshot?: FrameScreenshot; error?: string }
+  if (!payload.ok || !payload.screenshot) throw new Error(payload.error ?? 'Failed to save frame screenshot.')
+  return payload.screenshot
 }
 
 export async function recordOperation(operation: Record<string, unknown>) {

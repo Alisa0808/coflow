@@ -72,6 +72,21 @@ export class MediaImageShapeUtil extends ShapeUtil<MediaImageShape> {
     )
   }
 
+  override async toSvg(shape: MediaImageShape) {
+    const src = await imageSrcToExportableDataUrl(shape.props.src)
+    if (!src) return null
+
+    return (
+      <image
+        href={src}
+        width={shape.props.w}
+        height={shape.props.h}
+        preserveAspectRatio="xMidYMid meet"
+        aria-label={shape.props.title}
+      />
+    )
+  }
+
   override indicator(shape: MediaImageShape) {
     return <rect width={shape.props.w} height={shape.props.h} rx={14} ry={14} />
   }
@@ -81,4 +96,26 @@ export class MediaImageShapeUtil extends ShapeUtil<MediaImageShape> {
     path.roundRect(0, 0, shape.props.w, shape.props.h, 14)
     return path
   }
+}
+
+async function imageSrcToExportableDataUrl(src: string) {
+  if (!src) return ''
+  if (src.startsWith('data:')) return src
+
+  try {
+    const response = await fetch(src)
+    const blob = await response.blob()
+    return await blobToDataUrl(blob)
+  } catch {
+    return src
+  }
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to convert image blob to data URL.'))
+    reader.readAsDataURL(blob)
+  })
 }

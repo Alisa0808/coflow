@@ -46,10 +46,13 @@ The intended interactive path is:
 ```text
 User clicks Send to Codex on a frame
 → browser extracts bounded frame context
+→ browser exports the frame as PNG and tries to copy it to the system clipboard
 → writes latest frame context
+→ saves the frame screenshot as a hidden PNG artifact
 → writes a durable Frame Input JSON artifact
 → writes latest Codex frame request with status: awaiting_user_instruction and frameInput.absolutePath
-→ host integration attaches/pastes a frame screenshot into the Codex composer when available
+→ user can paste the copied screenshot into the Codex composer
+→ host integration can later attach/paste the screenshot automatically when available
 → Codex reads canvas.get_frame_request / canvas.get_selection / Frame Input
 → Codex uses the screenshot only as auxiliary visual evidence
 → Codex summarizes the task in conversation
@@ -66,9 +69,12 @@ The concrete send-to-Codex chain in code is:
 ```text
 Frame button
 → sendFrameToCodex(...)
+→ editor.toImage([frameId], { format: "png" })
+→ navigator.clipboard.write([ClipboardItem({ "image/png": blobPromise })])
 → extractMaterializedFrameContext(...)
 → publishFrameContext(...)
 → publishCodexFrameRequest({ status: "awaiting_user_instruction" })
+→ .codex-media-canvas/frame-screenshots/*.png
 → .codex-media-canvas/frame-inputs/frame-request-*.json
 → canvas.get_frame_request / canvas.get_selection
 → canvas.insert_media / canvas.create_version
@@ -77,10 +83,11 @@ Frame button
 The user-facing handoff should feel like a screenshot was sent to Codex. The
 Frame Input JSON is the hidden source of truth for the agent: it is intentionally
 a real file so Codex can inspect the exact bounded input, but it should not be
-shown in canvas toast copy. If the Codex desktop host exposes a composer
-attachment API, `Send to Codex` should paste/attach a frame screenshot to the
-composer for user confidence, while Codex still uses the Frame Input JSON as the
-primary execution input.
+shown in canvas toast copy. The immediate fallback UX is: copy the frame PNG to
+the system clipboard and tell the user to paste it into the Codex composer. If
+the Codex desktop host exposes a composer attachment API, `Send to Codex` should
+paste/attach the same screenshot automatically, while Codex still uses the Frame
+Input JSON as the primary execution input.
 
 ## 4. Current file map
 

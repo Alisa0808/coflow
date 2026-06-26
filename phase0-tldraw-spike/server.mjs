@@ -19,11 +19,13 @@ const assetsRoot = join(storeRoot, 'assets')
 const executionsRoot = join(storeRoot, 'executions')
 const uploadsRoot = join(storeRoot, 'uploads')
 const frameInputsRoot = join(storeRoot, 'frame-inputs')
+const frameScreenshotsRoot = join(storeRoot, 'frame-screenshots')
 const latestFrameContextPath = join(metadataRoot, 'latest-frame-context.json')
 const latestSelectionPath = join(metadataRoot, 'latest-selection.json')
 const latestAgentPromptPath = join(metadataRoot, 'latest-agent-prompt.json')
 const latestCodexFrameRequestPath = join(metadataRoot, 'latest-codex-frame-request.json')
 const latestFrameInputPath = join(metadataRoot, 'latest-frame-input.json')
+const latestFrameScreenshotPath = join(metadataRoot, 'latest-frame-screenshot.json')
 const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
 const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
 const operationsLogPath = join(logsRoot, 'operations.jsonl')
@@ -40,6 +42,7 @@ await mkdir(assetsRoot, { recursive: true })
 await mkdir(executionsRoot, { recursive: true })
 await mkdir(uploadsRoot, { recursive: true })
 await mkdir(frameInputsRoot, { recursive: true })
+await mkdir(frameScreenshotsRoot, { recursive: true })
 
 const server = createServer(async (request, response) => {
   try {
@@ -163,6 +166,21 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/api/codex/frame-input/latest' && request.method === 'GET') {
       return sendJson(response, await readJsonFile(latestFrameInputPath, null))
+    }
+
+    if (url.pathname === '/api/codex/frame-screenshots' && request.method === 'POST') {
+      const screenshot = await saveFrameScreenshot(request)
+      await writeJson(latestFrameScreenshotPath, {
+        updatedAt: new Date().toISOString(),
+        source: 'phase0-tldraw-spike',
+        screenshot,
+      })
+      await appendOperation({ type: 'codex.frame_screenshot.saved', screenshot })
+      return sendJson(response, { ok: true, screenshot })
+    }
+
+    if (url.pathname === '/api/codex/frame-screenshots/latest' && request.method === 'GET') {
+      return sendJson(response, await readJsonFile(latestFrameScreenshotPath, null))
     }
 
     if (url.pathname === '/api/executions/run-latest' && request.method === 'POST') {
@@ -366,6 +384,7 @@ async function writeFrameInputArtifact(frameRequest) {
     status: frameRequest.status,
     frameId: frameRequest.frameId,
     summary: frameRequest.summary,
+    frameScreenshot: frameRequest.frameScreenshot,
     defaultInstruction: frameRequest.defaultInstruction,
     recommendedUserPrompt: frameRequest.recommendedUserPrompt,
     promptPart: frameRequest.promptPart,
@@ -376,6 +395,30 @@ async function writeFrameInputArtifact(frameRequest) {
     mimeType: frameInput.mimeType,
     localPath,
     absolutePath,
+  }
+}
+
+async function saveFrameScreenshot(request) {
+  const frameId = String(request.headers['x-frame-id'] || 'frame')
+  const frameName = safeDecodeURIComponent(request.headers['x-frame-name'] || '')
+  const chunks = []
+  for await (const chunk of request) chunks.push(chunk)
+  const buffer = Buffer.concat(chunks)
+  if (buffer.length === 0) throw new Error('Frame screenshot upload is empty.')
+
+  const fileName = `${sanitizeFilePart(`${frameId}-${Date.now()}`)}.png`
+  const absolutePath = join(frameScreenshotsRoot, fileName)
+  const localPath = `.codex-media-canvas/frame-screenshots/${fileName}`
+  await writeFile(absolutePath, buffer)
+
+  return {
+    fileName,
+    mimeType: 'image/png',
+    localPath,
+    absolutePath,
+    frameId,
+    frameName,
+    bytes: buffer.length,
   }
 }
 

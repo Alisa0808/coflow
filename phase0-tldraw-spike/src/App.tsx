@@ -33,7 +33,9 @@ import {
   publishFrameContext,
   publishSelectionSnapshot,
   recordOperation,
+  saveFrameScreenshot,
   type CanvasCommand,
+  type FrameScreenshot,
 } from './api'
 
 const shapeUtils = [MediaImageShapeUtil]
@@ -69,6 +71,12 @@ type SelectedMediaInfo = {
   requestId?: string
   executionId?: string
 } | null
+
+type FrameScreenshotResult = {
+  clipboardCopied: boolean
+  screenshot?: FrameScreenshot
+  error?: string
+}
 
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
@@ -191,6 +199,8 @@ export default function App() {
       return
     }
 
+    const frameScreenshot = await copyAndSaveFrameScreenshot(editor, frame.id as TLShapeId, context.frameName)
+
     await publishFrameContext(context)
     const promptPart = buildBoundedFrameContextPromptPart(context, 'canvas-frame-action')
     await publishCodexFrameRequest({
@@ -204,6 +214,7 @@ export default function App() {
         anchorMediaId: context.anchorMedia.shapeId,
         annotationTexts: context.annotations.map((annotation) => annotation.text).filter((text): text is string => Boolean(text)),
       },
+      frameScreenshot: frameScreenshot.screenshot,
       defaultInstruction:
         'Treat this as a pending Codex canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back on the board.',
       recommendedUserPrompt:
@@ -216,7 +227,51 @@ export default function App() {
       skillName: 'codex-media-generation',
       promptSource: 'canvas-frame-action',
     })
-    showStatus('Sent frame to Codex. Add instructions in the Codex chat to continue.', 5200)
+    showStatus(
+      frameScreenshot.clipboardCopied
+        ? 'Sent frame to Codex. Screenshot copied — paste it into the Codex chat.'
+        : 'Sent frame to Codex. Screenshot copy was blocked, but Codex can read the Frame Input.',
+      6200,
+    )
+  }
+
+  async function copyAndSaveFrameScreenshot(editor: Editor, frameId: TLShapeId, frameName: string): Promise<FrameScreenshotResult> {
+    const blobPromise = editor
+      .toImage([frameId], {
+        format: 'png',
+        background: true,
+        padding: 24,
+        scale: 2,
+      })
+      .then(({ blob }) => (blob.type === 'image/png' ? blob : new Blob([blob], { type: 'image/png' })))
+
+    const clipboardPromise = writePngBlobPromiseToClipboard(editor, blobPromise)
+    const savePromise = blobPromise.then((blob) => saveFrameScreenshot({ frameId, frameName, blob }))
+    const [clipboardResult, saveResult] = await Promise.allSettled([clipboardPromise, savePromise])
+    const clipboardCopied = clipboardResult.status === 'fulfilled'
+    const screenshot = saveResult.status === 'fulfilled' ? saveResult.value : undefined
+    const error =
+      clipboardResult.status === 'rejected'
+        ? clipboardResult.reason instanceof Error
+          ? clipboardResult.reason.message
+          : String(clipboardResult.reason)
+        : saveResult.status === 'rejected'
+          ? saveResult.reason instanceof Error
+            ? saveResult.reason.message
+            : String(saveResult.reason)
+          : undefined
+
+    if (!clipboardCopied || !screenshot) {
+      await recordOperation({
+        type: 'codex.frame_screenshot.partial_failure',
+        frameId,
+        clipboardCopied,
+        screenshotSaved: Boolean(screenshot),
+        error,
+      })
+    }
+
+    return { clipboardCopied, screenshot, error }
   }
 
   async function placeVersionFromCommand(command: CanvasCommand) {
@@ -1151,6 +1206,19 @@ function blobToDataUrl(blob: Blob) {
     reader.onerror = () => reject(reader.error ?? new Error('Failed to read asset blob.'))
     reader.readAsDataURL(blob)
   })
+}
+
+function writePngBlobPromiseToClipboard(editor: Editor, blobPromise: Promise<Blob>) {
+  const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
+  const ClipboardItemCtor = appWindow.ClipboardItem
+  if (!appWindow.navigator.clipboard?.write || !ClipboardItemCtor) {
+    return Promise.reject(new Error('Image clipboard write is not supported in this browser.'))
+  }
+
+  const clipboardItem = new ClipboardItemCtor({
+    'image/png': blobPromise,
+  })
+  return appWindow.navigator.clipboard.write([clipboardItem])
 }
 
 function normalizeProps(shape: TLShape): Record<string, unknown> {
