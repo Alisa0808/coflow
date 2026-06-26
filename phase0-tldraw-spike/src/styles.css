@@ -233,11 +233,15 @@ body {
   overflow: hidden;
 }
 
-.media-shape img {
+.media-shape img,
+.media-shape video {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
-  pointer-events: none;
   user-select: none;
+}
+
+.media-shape img {
+  pointer-events: none;
 }

@@ -333,6 +333,7 @@ export default function App() {
             versionId,
             localPath: command.localPath ?? '',
             src,
+            mediaType: command.mediaType ?? command.outputMediaType ?? 'image',
             title: command.title ?? 'Codex generated version',
             prompt: command.prompt ?? '',
             provider: command.provider ?? 'codex',
@@ -762,6 +763,7 @@ function seedCanvas(editor: Editor) {
           versionId: 'version:source-product-v1',
           localPath: '.codex-media-canvas/assets/images/source-product.svg',
           src: sourceImageSvg(),
+          mediaType: 'image',
           title: 'Source product image',
           prompt: 'Original product hero image',
           provider: 'imported',
@@ -847,11 +849,12 @@ async function toCanvasItem(editor: Editor, shape: TLShape): Promise<CanvasItem>
     'requestId',
     'executionId',
     'title',
+    'mediaType',
   ])
 
   return {
     id: shape.id,
-    kind: toCanvasItemKind(shape.type),
+    kind: toCanvasItemKind(shape.type, props),
     canvasType: shape.type,
     parentId: shape.parentId,
     bounds: {
@@ -872,11 +875,22 @@ async function getCanvasAssetContext(editor: Editor, shape: TLShape, props: Reco
   const assetProps = (asset?.props ?? {}) as Record<string, unknown>
   const assetMeta = (asset?.meta ?? {}) as Record<string, unknown>
   const src = stringFromUnknown(props.src) ?? stringFromUnknown(assetProps.src) ?? stringFromUnknown(assetMeta.src)
+  const mediaType =
+    stringFromUnknown(props.mediaType) === 'video' ||
+    shape.type === 'video' ||
+    looksLikeVideoPath(src) ||
+    looksLikeVideoPath(stringFromUnknown(props.localPath)) ||
+    looksLikeVideoPath(stringFromUnknown(assetMeta.localPath)) ||
+    stringFromUnknown(props.mimeType)?.startsWith('video/') ||
+    stringFromUnknown(assetProps.mimeType)?.startsWith('video/') ||
+    stringFromUnknown(assetMeta.mimeType)?.startsWith('video/')
+      ? 'video'
+      : 'image'
   const mimeType =
     stringFromUnknown(props.mimeType) ??
     stringFromUnknown(assetProps.mimeType) ??
     stringFromUnknown(assetMeta.mimeType) ??
-    (shape.type === 'video' ? 'video/mp4' : 'image/*')
+    (mediaType === 'video' ? 'video/mp4' : 'image/*')
   let localPath = stringFromUnknown(props.localPath) ?? stringFromUnknown(assetMeta.localPath)
   let absolutePath = stringFromUnknown(props.absolutePath) ?? stringFromUnknown(assetMeta.absolutePath)
 
@@ -899,6 +913,7 @@ async function getCanvasAssetContext(editor: Editor, shape: TLShape, props: Reco
   const bounds = getNativeShapeBounds(shape)
   return {
     assetId,
+    mediaType,
     mimeType,
     localPath,
     absolutePath,
@@ -910,14 +925,28 @@ async function getCanvasAssetContext(editor: Editor, shape: TLShape, props: Reco
   }
 }
 
-function toCanvasItemKind(type: string): CanvasItemKind {
-  if (type === MEDIA_IMAGE_SHAPE || type === 'image') return 'image'
+function toCanvasItemKind(type: string, props: Record<string, unknown> = {}): CanvasItemKind {
+  if (type === MEDIA_IMAGE_SHAPE) return isCustomVideoMedia(props) ? 'video' : 'image'
+  if (type === 'image') return 'image'
   if (type === 'video') return 'video'
   if (type === 'frame') return 'frame'
   if (type === 'note') return 'note'
   if (type === 'text') return 'text'
   if (type === 'arrow') return 'arrow'
   return 'shape'
+}
+
+function isCustomVideoMedia(props: Record<string, unknown>) {
+  return (
+    stringFromUnknown(props.mediaType) === 'video' ||
+    looksLikeVideoPath(stringFromUnknown(props.src)) ||
+    looksLikeVideoPath(stringFromUnknown(props.localPath)) ||
+    stringFromUnknown(props.mimeType)?.startsWith('video/')
+  )
+}
+
+function looksLikeVideoPath(path?: string) {
+  return /\.(mp4|webm|mov)(\?|#|$)/i.test(path ?? '')
 }
 
 function getShapePlainText(props: Record<string, unknown>) {

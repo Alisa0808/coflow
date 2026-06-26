@@ -49,6 +49,7 @@ export type CanvasItemKind = 'image' | 'video' | 'audio' | 'model3d' | 'text' | 
 
 export type CanvasAssetContext = {
   assetId: string
+  mediaType?: 'image' | 'video'
   mimeType: string
   localPath?: string
   absolutePath?: string

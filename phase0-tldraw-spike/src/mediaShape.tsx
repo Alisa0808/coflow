@@ -11,6 +11,7 @@ export type MediaImageShape = TLBaseShape<
     versionId: string
     localPath: string
     src: string
+    mediaType: 'image' | 'video'
     title: string
     prompt: string
     provider: string
@@ -40,6 +41,7 @@ export class MediaImageShapeUtil extends ShapeUtil<MediaImageShape> {
       versionId: 'version:unset',
       localPath: '',
       src: '',
+      mediaType: 'image',
       title: 'Media image',
       prompt: '',
       provider: 'codex-native',
@@ -65,6 +67,14 @@ export class MediaImageShapeUtil extends ShapeUtil<MediaImageShape> {
   }
 
   override component(shape: MediaImageShape) {
+    if (isVideoMedia(shape.props)) {
+      return (
+        <HTMLContainer className="media-shape">
+          <video src={shape.props.src} controls muted loop playsInline draggable={false} />
+        </HTMLContainer>
+      )
+    }
+
     return (
       <HTMLContainer className="media-shape">
         <img src={shape.props.src} alt={shape.props.title} draggable={false} />
@@ -73,6 +83,19 @@ export class MediaImageShapeUtil extends ShapeUtil<MediaImageShape> {
   }
 
   override async toSvg(shape: MediaImageShape) {
+    if (isVideoMedia(shape.props)) {
+      return (
+        <g aria-label={shape.props.title}>
+          <rect width={shape.props.w} height={shape.props.h} rx={14} ry={14} fill="#0f172a" />
+          <circle cx={shape.props.w / 2} cy={shape.props.h / 2} r={28} fill="rgba(255,255,255,0.18)" />
+          <path
+            d={`M ${shape.props.w / 2 - 8} ${shape.props.h / 2 - 14} L ${shape.props.w / 2 - 8} ${shape.props.h / 2 + 14} L ${shape.props.w / 2 + 16} ${shape.props.h / 2} Z`}
+            fill="#ffffff"
+          />
+        </g>
+      )
+    }
+
     const src = await imageSrcToExportableDataUrl(shape.props.src)
     if (!src) return null
 
@@ -96,6 +119,14 @@ export class MediaImageShapeUtil extends ShapeUtil<MediaImageShape> {
     path.roundRect(0, 0, shape.props.w, shape.props.h, 14)
     return path
   }
+}
+
+function isVideoMedia(props: MediaImageShape['props']) {
+  return (
+    props.mediaType === 'video' ||
+    props.src.toLowerCase().match(/\.(mp4|webm|mov)(\?|#|$)/) !== null ||
+    props.localPath.toLowerCase().match(/\.(mp4|webm|mov)(\?|#|$)/) !== null
+  )
 }
 
 async function imageSrcToExportableDataUrl(src: string) {
