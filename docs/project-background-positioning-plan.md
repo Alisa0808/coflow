@@ -330,12 +330,11 @@ Frame Input 文件是 `Send to Codex` 的附件化边界：
 - Codex 执行时以 Frame Input JSON 为主输入，截图只用于辅助视觉判断，避免模型只看截图而丢掉对象 id、素材路径、标注结构和写回位置；
 - Frame Input 必须保留源素材路径、frame id、对象/标注、推荐用户提示与默认处理指令，作为后续 skill/provider 调用的唯一可信入口。
 
-首次进入画布的 example 策略也先记为待办：
+首次进入画布默认保持空白：
 
-- 正式开源时，不应把 Phase 0 的 seeded product demo 强行展示给所有用户；
-- 首次进入可以出现一个 example / sample project / onboarding canvas；
-- example 的具体内容后续再定；
-- 默认空白画布、开发模式自动 seed、以及 `Load example` 按钮三种形态需要在正式发布前确认。
+- 不再保留 Phase 0 seeded product demo；
+- 不做自动 example / sample project / onboarding canvas；
+- 如果未来需要示例内容，应以用户显式触发的 `Load example` / template gallery 形式出现，而不是首次进入自动污染画布。
 
 ## 3. 产品定位
 

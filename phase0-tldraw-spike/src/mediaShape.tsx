@@ -62,8 +62,8 @@ export class MediaImageShapeUtil extends ShapeUtil<MediaImageShape> {
     })
   }
 
-  override canBind({ toShape, bindingType }: TLShapeUtilCanBindOpts<MediaImageShape>) {
-    return bindingType === 'arrow' && toShape.type === MEDIA_IMAGE_SHAPE
+  override canBind(_opts: TLShapeUtilCanBindOpts<MediaImageShape>) {
+    return false
   }
 
   override component(shape: MediaImageShape) {

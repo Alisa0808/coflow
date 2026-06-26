@@ -1,16 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
-import {
-  Tldraw,
-  createBindingId,
-  createShapeId,
-  toRichText,
-  type Editor,
-  type TLAsset,
-  type TLAssetStore,
-  type TLShape,
-  type TLShapeId,
-  type TLShapePartial,
-} from 'tldraw'
+import { Tldraw, createShapeId, toRichText, type Editor, type TLAsset, type TLAssetStore, type TLShape, type TLShapeId, type TLShapePartial } from 'tldraw'
 import { buildBoundedFrameContextPromptPart } from './agentPromptParts'
 import {
   createVersionPlacement,
@@ -46,7 +35,7 @@ const IMPORTED_MEDIA_INITIAL_DISPLAY_FIT = { w: 1280, h: 720 }
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 32 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024
 const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
-const DEFAULT_ARROW_BEND = 80
+const DEFAULT_ARROW_BEND = 20
 
 type FrameActionState = {
   frameId: string
@@ -143,6 +132,20 @@ export default function App() {
 
   function onMount(editor: Editor) {
     editorRef.current = editor
+    const disposeDefaultArrow = editor.store.sideEffects.registerBeforeCreateHandler('shape', (shape) => {
+      if (shape.type !== 'arrow') return shape
+      const props = shape.props as unknown as { bend?: number }
+      if (typeof props.bend === 'number' && props.bend !== 0) return shape
+      return {
+        ...shape,
+        props: {
+          ...shape.props,
+          kind: 'arc',
+          bend: DEFAULT_ARROW_BEND,
+        },
+      }
+    })
+    editor.disposables.add(disposeDefaultArrow)
     void restoreCanvasDocument(editor)
     setFrameAction(getSelectedFrameAction(editor))
     setSelectedMediaInfo(getSelectedMediaInfo(editor))
@@ -156,7 +159,8 @@ export default function App() {
       })
       scheduleSelectionPublish(editor)
       normalizeImportedMediaShapes(editor, Object.values(changes.added))
-      normalizeNewArrows(editor, Object.values(changes.added))
+      normalizeLegacyDefaultArrowBends(editor, Object.values(changes.added))
+      detachMediaArrowBindings(editor, Object.values(changes.added))
       scheduleCanvasDocumentSave(editor)
     })
     editor.disposables.add(unsubscribe)
@@ -179,6 +183,9 @@ export default function App() {
         }
       }
       if (document.camera) editor.setCamera(document.camera, { immediate: true })
+      normalizeLegacyDefaultArrowBends(editor)
+      detachMediaArrowBindings(editor)
+      void persistCanvasDocument(editor)
       showStatus('Restored local canvas.', 1800)
       void publishCurrentSelection(editor)
     } catch (error) {
@@ -252,7 +259,7 @@ export default function App() {
     const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
     const frame = shapes.find((shape) => shape.id === frameId && shape.type === 'frame') ?? findContextFrame(editor, shapes)
     if (!frame) {
-      showStatus('No frame found. Select a frame or use the seeded task frame.', 5200)
+      showStatus('No frame found. Select a frame around the media and annotations first.', 5200)
       return
     }
 
@@ -381,6 +388,8 @@ export default function App() {
     const placement = createVersionPlacement(context.bounds, outputSize, shapes.map(getShapeBounds))
     const parentShapeId = anchor.shapeId as TLShapeId
     const versionId = `version:codex-${Date.now()}`
+    const arrowStart = placement.lineageArrow.start
+    const arrowEnd = placement.lineageArrow.end
 
     editor.run(() => {
       editor.createShapes([
@@ -411,11 +420,12 @@ export default function App() {
         {
           id: arrowId,
           type: 'arrow',
-          x: 0,
-          y: 0,
+          x: arrowStart.x,
+          y: arrowStart.y,
           props: {
-            start: { x: placement.lineageArrow.start.x, y: placement.lineageArrow.start.y },
-            end: { x: placement.lineageArrow.end.x, y: placement.lineageArrow.end.y },
+            kind: 'arc',
+            start: { x: 0, y: 0 },
+            end: { x: arrowEnd.x - arrowStart.x, y: arrowEnd.y - arrowStart.y },
             bend: DEFAULT_ARROW_BEND,
             dash: 'draw',
             size: 'm',
@@ -425,32 +435,6 @@ export default function App() {
             arrowheadEnd: 'arrow',
             richText: toRichText(''),
             labelPosition: 0.5,
-          },
-        },
-      ])
-      editor.createBindings([
-        {
-          id: createBindingId(),
-          type: 'arrow',
-          fromId: arrowId,
-          toId: parentShapeId,
-          props: {
-            terminal: 'start',
-            normalizedAnchor: { x: 1, y: 0.5 },
-            isExact: false,
-            isPrecise: true,
-          },
-        },
-        {
-          id: createBindingId(),
-          type: 'arrow',
-          fromId: arrowId,
-          toId: childId,
-          props: {
-            terminal: 'end',
-            normalizedAnchor: { x: 0, y: 0.5 },
-            isExact: false,
-            isPrecise: true,
           },
         },
       ])
@@ -684,27 +668,6 @@ function normalizeImportedMediaShapes(editor: Editor, records: unknown[]) {
   focusImportedMedia(editor)
 }
 
-function normalizeNewArrows(editor: Editor, records: unknown[]) {
-  const updates: TLShapePartial[] = []
-  for (const record of records) {
-    const shape = record as TLShape
-    if (shape.typeName !== 'shape' || shape.type !== 'arrow') continue
-    const props = shape.props as { bend?: number }
-    if (typeof props.bend === 'number' && props.bend !== 0) continue
-    updates.push({
-      id: shape.id,
-      type: 'arrow',
-      props: {
-        bend: DEFAULT_ARROW_BEND,
-      },
-    })
-  }
-
-  if (updates.length > 0) {
-    editor.run(() => editor.updateShapes(updates), { history: 'ignore' })
-  }
-}
-
 function focusImportedMedia(editor: Editor) {
   const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
   appWindow.requestAnimationFrame(() => {
@@ -712,6 +675,48 @@ function focusImportedMedia(editor: Editor) {
       editor.zoomToSelection({ animation: { duration: 180 } })
     })
   })
+}
+
+function detachMediaArrowBindings(editor: Editor, records: unknown[] = editor.store.allRecords()) {
+  const mediaShapeIds = new Set(
+    editor
+      .getCurrentPageShapes()
+      .filter((shape) => shape.type === MEDIA_IMAGE_SHAPE || shape.type === 'image' || shape.type === 'video')
+      .map((shape) => shape.id),
+  )
+  if (mediaShapeIds.size === 0) return
+
+  const bindingIds = records
+    .filter((record): record is { id: string; typeName: string; type: string; fromId?: TLShapeId; toId?: TLShapeId } => {
+      if (!record || typeof record !== 'object') return false
+      const candidate = record as { typeName?: string; type?: string; fromId?: TLShapeId; toId?: TLShapeId }
+      if (candidate.typeName !== 'binding' || candidate.type !== 'arrow') return false
+      return Boolean((candidate.fromId && mediaShapeIds.has(candidate.fromId)) || (candidate.toId && mediaShapeIds.has(candidate.toId)))
+    })
+    .map((binding) => binding.id)
+
+  if (bindingIds.length === 0) return
+  editor.run(() => editor.deleteBindings(bindingIds as never[], { isolateShapes: true }), { history: 'ignore' })
+}
+
+function normalizeLegacyDefaultArrowBends(editor: Editor, records: unknown[] = editor.store.allRecords()) {
+  const updates: TLShapePartial[] = []
+  for (const record of records) {
+    const shape = record as TLShape
+    if (!shape || shape.typeName !== 'shape' || shape.type !== 'arrow') continue
+    const props = shape.props as { bend?: number }
+    if (Math.abs(props.bend ?? 0) !== 80) continue
+    updates.push({
+      id: shape.id,
+      type: 'arrow',
+      props: {
+        bend: Math.sign(props.bend ?? 1) * DEFAULT_ARROW_BEND,
+      },
+    })
+  }
+
+  if (updates.length === 0) return
+  editor.run(() => editor.updateShapes(updates), { history: 'ignore' })
 }
 
 function getNativeShapeBounds(shape: TLShape): Bounds {

@@ -139,7 +139,7 @@ the frame, matching the same bounded-context rule used by Frame Input.
 - No real async polling for long-running provider jobs.
 - No production result materialization from remote URLs.
 - No first-class 3D asset shape / preview / provider mode yet.
-- First-run example/onboarding content is not finalized; current seeded demo is still a Phase 0 test fixture.
+- First-run canvas is intentionally blank; seeded demos/examples are removed from the default path.
 
 ## 6. The next visible loop
 
