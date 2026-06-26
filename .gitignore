@@ -5,11 +5,16 @@
 !.env.local.example
 .codex-media-canvas/
 .ai-canvas/
+ai-canvas/
 node_modules/
+node_modules
+**/node_modules
 dist/
 .next/
 .turbo/
 .vite/
+.wrangler/
+**/.wrangler/
 *.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
