@@ -2829,3 +2829,71 @@ Next plan:
   - `canvas.create_version(...)`.
 - Package this as a Codex agent Skill/MCP bridge instead of a whiteboard API button.
 - Use Atlas only behind the Codex Skill executor after Codex has correctly selected source assets, prompt, references, and writeback semantics.
+
+## 2026-06-26 — Close the canvas/Codex/writeback bridge instead of stopping at context export
+
+User report:
+
+- Merely exporting frame context is not enough. Cowart/tldraw agent patterns already prove that the canvas-agent loop should be closed.
+- The intended loop is: canvas frame → Codex/Skill → generated result → canvas writeback.
+
+Changes made:
+
+- Added a first-class Codex frame request:
+  - browser endpoint: `POST /api/codex/frame-requests`;
+  - latest request endpoint: `GET /api/codex/frame-requests/latest`;
+  - metadata file: `.codex-media-canvas/metadata/latest-codex-frame-request.json`;
+  - operation log event: `codex.frame_request.created`.
+- `Send to Codex` now publishes both:
+  - latest frame context;
+  - latest Codex frame request with a default instruction for Codex/Skill.
+- Updated MCP server tools:
+  - `canvas.get_frame_context`: read latest bounded frame context;
+  - `canvas.get_frame_request`: read latest user-triggered frame request;
+  - `canvas.create_version`: write a Codex-generated media result back to the canvas.
+- Reframed `canvas.create_version`:
+  - it no longer means "ask the browser to generate";
+  - it now means "Codex has generated something; place it as a child version on the board."
+- Restored browser polling only for `canvas.create_version` writeback commands.
+- Added type-filtered command claiming:
+  - browser claims only `canvas.create_version`;
+  - `canvas.agent_prompt` or other Codex-side commands are not accidentally swallowed.
+- Canvas writeback now:
+  - places generated media to the right of the source frame;
+  - creates a lineage arrow from source media to child version;
+  - stores prompt/provider/model/status metadata on the generated media shape;
+  - records `codex.version_placed`.
+
+Current honest boundary:
+
+- The local bridge is now structurally closed.
+- The browser still cannot directly wake up the current Codex desktop chat process by itself.
+- Full automatic click-to-Codex execution requires registering this bridge as a Codex MCP/Skill or running a local Codex worker.
+- Until that wiring is registered, the practical loop is:
+  1. user clicks `Send to Codex`;
+  2. Codex reads `canvas.get_frame_request` / `canvas.get_frame_context`;
+  3. Codex generates using the active Skill/provider;
+  4. Codex calls `canvas.create_version`;
+  5. browser polls the writeback command and places the result.
+
+Verification:
+
+- `npm run build`: passed.
+- `npm test`: passed, 18/18.
+- `node --check server.mjs`: passed.
+- `node --check mcp-server.mjs`: passed.
+- Restarted local server at `http://127.0.0.1:5176/`.
+
+Manual acceptance checklist:
+
+1. Refresh `http://127.0.0.1:5176/`.
+2. Select a frame and click `Send to Codex`.
+3. Confirm `.codex-media-canvas/metadata/latest-codex-frame-request.json` is created or updated.
+4. Queue a `canvas.create_version` command through MCP or `POST /api/commands`.
+5. Confirm the browser places the generated media to the right of the frame and creates a lineage arrow.
+
+Next plan:
+
+- Register the bridge as a Codex MCP/Skill so this chat can call `canvas.get_frame_request`, `canvas.get_frame_context`, and `canvas.create_version` directly.
+- Add `canvas.capture_frame(frameId?)` so Codex can inspect an exact visual crop of the bounded frame, not only structured JSON.
+- Move Atlas/GPT Image 2/Seedance execution behind the Codex Skill runner, never behind the canvas button.

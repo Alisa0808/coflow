@@ -20,6 +20,7 @@ const executionsRoot = join(storeRoot, 'executions')
 const uploadsRoot = join(storeRoot, 'uploads')
 const latestFrameContextPath = join(metadataRoot, 'latest-frame-context.json')
 const latestAgentPromptPath = join(metadataRoot, 'latest-agent-prompt.json')
+const latestCodexFrameRequestPath = join(metadataRoot, 'latest-codex-frame-request.json')
 const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
 const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
 const operationsLogPath = join(logsRoot, 'operations.jsonl')
@@ -102,6 +103,31 @@ const server = createServer(async (request, response) => {
       return sendJson(response, await readJsonFile(latestAgentPromptPath, null))
     }
 
+    if (url.pathname === '/api/codex/frame-requests' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      const frameRequest = {
+        id: body.id || `frame-request:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+        at: new Date().toISOString(),
+        source: body.source || 'canvas-frame-action',
+        frameId: body.frameId,
+        promptPart: body.promptPart,
+        defaultInstruction:
+          body.defaultInstruction ||
+          'Use canvas.get_frame_context for this frame, decide the right skill/provider/model in Codex, then call canvas.create_version to write the result back.',
+      }
+      await writeJson(latestCodexFrameRequestPath, {
+        updatedAt: new Date().toISOString(),
+        source: 'phase0-tldraw-spike',
+        request: frameRequest,
+      })
+      await appendOperation({ type: 'codex.frame_request.created', request: frameRequest })
+      return sendJson(response, { ok: true, request: frameRequest })
+    }
+
+    if (url.pathname === '/api/codex/frame-requests/latest' && request.method === 'GET') {
+      return sendJson(response, await readJsonFile(latestCodexFrameRequestPath, null))
+    }
+
     if (url.pathname === '/api/executions/run-latest' && request.method === 'POST') {
       const latest = await readJsonFile(latestGenerationRequestPath, null)
       if (!latest?.request) return sendJson(response, { ok: false, error: 'No latest generation request found.' })
@@ -128,7 +154,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === '/api/commands/pending' && request.method === 'GET') {
-      const commands = await claimPendingCommands()
+      const commands = await claimPendingCommands(url.searchParams.get('type'))
       return sendJson(response, { ok: true, commands })
     }
 
@@ -286,7 +312,7 @@ async function appendCommand(command) {
   await appendFile(pendingCommandsPath, `${JSON.stringify(command)}\n`)
 }
 
-async function claimPendingCommands() {
+async function claimPendingCommands(type) {
   let raw = ''
   try {
     raw = await readFile(pendingCommandsPath, 'utf8')
@@ -294,12 +320,20 @@ async function claimPendingCommands() {
     return []
   }
 
-  await writeFile(pendingCommandsPath, '')
-  return raw
+  const commands = raw
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line))
+  if (!type) {
+    await writeFile(pendingCommandsPath, '')
+    return commands
+  }
+
+  const claimed = commands.filter((command) => command.type === type)
+  const remaining = commands.filter((command) => command.type !== type)
+  await writeFile(pendingCommandsPath, remaining.map((command) => JSON.stringify(command)).join('\n') + (remaining.length > 0 ? '\n' : ''))
+  return claimed
 }
 
 function createCommand(input) {
@@ -313,6 +347,14 @@ function createCommand(input) {
     provider: input.provider,
     outputMediaType: input.outputMediaType,
     generationMode: input.generationMode,
+    mediaType: input.mediaType,
+    src: input.src,
+    localPath: input.localPath,
+    absolutePath: input.absolutePath,
+    title: input.title,
+    model: input.model,
+    status: input.status,
+    skillName: input.skillName,
   }
 }
 

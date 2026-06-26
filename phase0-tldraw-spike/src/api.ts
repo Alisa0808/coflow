@@ -9,6 +9,14 @@ export type CanvasCommand = {
   provider?: 'mock-provider' | 'atlas' | 'seedance' | 'kling'
   outputMediaType?: 'image' | 'video'
   generationMode?: string
+  mediaType?: 'image' | 'video'
+  src?: string
+  localPath?: string
+  absolutePath?: string
+  title?: string
+  model?: string
+  status?: string
+  skillName?: string
 }
 
 export type QueueAgentPromptInput = {
@@ -34,6 +42,12 @@ export type MaterializedAsset = {
   localPath: string
   absolutePath: string
   bytes: number
+}
+
+export type CodexFrameRequestInput = {
+  frameId: string
+  promptPart: Record<string, unknown>
+  defaultInstruction: string
 }
 
 export type ExecutionResult = {
@@ -75,6 +89,17 @@ export async function publishFrameContext(context: FrameContext) {
   })
 }
 
+export async function publishCodexFrameRequest(request: CodexFrameRequestInput) {
+  const response = await fetch('/api/codex/frame-requests', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  const payload = (await response.json()) as { ok: boolean; request?: Record<string, unknown>; error?: string }
+  if (!payload.ok) throw new Error(payload.error ?? 'Failed to publish Codex frame request.')
+  return payload.request
+}
+
 export async function recordOperation(operation: Record<string, unknown>) {
   await fetch('/api/operations', {
     method: 'POST',
@@ -83,8 +108,8 @@ export async function recordOperation(operation: Record<string, unknown>) {
   })
 }
 
-export async function fetchPendingCommands(): Promise<CanvasCommand[]> {
-  const response = await fetch('/api/commands/pending')
+export async function fetchPendingCommands(type?: CanvasCommand['type']): Promise<CanvasCommand[]> {
+  const response = await fetch(`/api/commands/pending${type ? `?type=${encodeURIComponent(type)}` : ''}`)
   const payload = (await response.json()) as { commands?: CanvasCommand[] }
   return payload.commands ?? []
 }

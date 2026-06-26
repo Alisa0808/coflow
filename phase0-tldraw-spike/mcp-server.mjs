@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('.', import.meta.url))
 const workspaceRoot = process.env.WORKSPACE_ROOT || join(root, '..')
 const latestFrameContextPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-frame-context.json')
+const latestCodexFrameRequestPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-codex-frame-request.json')
 const commandsRoot = join(workspaceRoot, '.codex-media-canvas', 'commands')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
 
@@ -19,8 +20,18 @@ const tools = [
     },
   },
   {
+    name: 'canvas.get_frame_request',
+    description: 'Read the latest user-triggered Codex frame request from the canvas browser.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'canvas.create_version',
-    description: 'Queue a version generation command for the canvas browser to execute against a bounded frame.',
+    description:
+      'Write a Codex-generated media result back to the canvas as a child version of the bounded frame. This does not ask the browser to call a model or provider.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -28,27 +39,45 @@ const tools = [
           type: 'string',
           description: 'Optional frame id. Defaults to the latest published frame context when available.',
         },
+        mediaType: {
+          type: 'string',
+          enum: ['image', 'video'],
+          description: 'The output media type to place on the canvas.',
+        },
+        src: {
+          type: 'string',
+          description: 'Data URL or browser-accessible URL for the generated media.',
+        },
+        localPath: {
+          type: 'string',
+          description: 'Optional local path inside .codex-media-canvas, e.g. .codex-media-canvas/assets/images/output.png.',
+        },
+        absolutePath: {
+          type: 'string',
+          description: 'Optional absolute filesystem path for provenance metadata.',
+        },
+        title: {
+          type: 'string',
+          description: 'Optional visible/provenance title for the generated child media.',
+        },
         prompt: {
           type: 'string',
-          description: 'Optional generation instruction override.',
+          description: 'Prompt or instruction used by Codex/Skill to generate this version.',
         },
         provider: {
           type: 'string',
-          enum: ['mock-provider', 'atlas', 'seedance', 'kling'],
-          description: 'Optional preferred provider. Defaults to atlas; use mock-provider only for local fallback tests.',
+          description: 'Provider used by Codex/Skill, e.g. codex-native, atlas, openai, kling.',
         },
-        outputMediaType: {
+        model: {
           type: 'string',
-          enum: ['image', 'video'],
-          description: 'Optional desired output media type. Use video for text-to-video or reference-to-video generation.',
+          description: 'Model used by Codex/Skill.',
         },
-        generationMode: {
+        status: {
           type: 'string',
-          enum: ['text_to_image', 'image_edit', 'text_to_video', 'reference_to_video'],
-          description:
-            'Optional explicit provider mode. Use reference_to_video for any video request with media references; provider adapters can map references to image-to-video, motion reference, element edit, etc.',
+          description: 'Writeback status, normally succeeded.',
         },
       },
+      required: ['mediaType'],
       additionalProperties: false,
     },
   },
@@ -132,6 +161,18 @@ async function handleLine(line) {
       })
     }
 
+    if (toolName === 'canvas.get_frame_request') {
+      const payload = await readLatestCodexFrameRequest()
+      return respond(id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload, null, 2),
+          },
+        ],
+      })
+    }
+
     if (toolName === 'canvas.create_version' || toolName === 'canvas.agent_prompt') {
       const payload = await enqueueCanvasCommand(params?.arguments ?? {}, toolName)
       return respond(id, {
@@ -163,6 +204,19 @@ async function readLatestFrameContext() {
   }
 }
 
+async function readLatestCodexFrameRequest() {
+  try {
+    return JSON.parse(await readFile(latestCodexFrameRequestPath, 'utf8'))
+  } catch {
+    return {
+      updatedAt: null,
+      source: 'phase0-tldraw-spike',
+      request: null,
+      warning: 'No Codex frame request has been published yet. Select a frame and click Send to Codex in the canvas.',
+    }
+  }
+}
+
 async function enqueueCanvasCommand(args, toolName) {
   const latest = await readLatestFrameContext()
   const frameId = args.frameId || latest.context?.frameId
@@ -176,6 +230,14 @@ async function enqueueCanvasCommand(args, toolName) {
     provider: args.provider,
     outputMediaType: args.outputMediaType,
     generationMode: args.generationMode,
+    mediaType: args.mediaType,
+    src: args.src,
+    localPath: args.localPath,
+    absolutePath: args.absolutePath,
+    title: args.title,
+    model: args.model,
+    status: args.status || (toolName === 'canvas.create_version' ? 'succeeded' : undefined),
+    skillName: args.skillName || (toolName === 'canvas.create_version' ? 'codex-media-generation' : undefined),
   }
 
   await mkdir(commandsRoot, { recursive: true })
@@ -184,9 +246,12 @@ async function enqueueCanvasCommand(args, toolName) {
   return {
     ok: true,
     command,
-    note: frameId
-      ? `Queued ${toolName}. Keep the canvas browser open; it will claim and execute the command.`
-      : `Queued ${toolName} without frameId. The browser will fall back to the currently selected or first frame.`,
+    note:
+      toolName === 'canvas.create_version'
+        ? `Queued canvas writeback. Keep the canvas browser open; it will place the generated version on the board.`
+        : frameId
+          ? `Queued ${toolName} for the external Codex/Skill runtime.`
+          : `Queued ${toolName} without frameId.`,
   }
 }
 

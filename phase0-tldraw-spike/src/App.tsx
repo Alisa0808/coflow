@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import {
   Tldraw,
+  createBindingId,
   createShapeId,
   toRichText,
   type Editor,
@@ -12,14 +13,16 @@ import {
 } from 'tldraw'
 import { buildBoundedFrameContextPromptPart } from './agentPromptParts'
 import {
+  createVersionPlacement,
   extractFrameContext,
+  getShapeBounds,
   richTextToPlainText,
   type Bounds,
   type CanvasShapeRecord,
   type FrameContext,
 } from './canvasContracts'
 import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil, type MediaImageShape } from './mediaShape'
-import { materializeAsset, publishFrameContext, recordOperation } from './api'
+import { fetchPendingCommands, materializeAsset, publishCodexFrameRequest, publishFrameContext, recordOperation, type CanvasCommand } from './api'
 
 const shapeUtils = [MediaImageShapeUtil]
 const MAX_ASSET_SIZE_BYTES = 2 * 1024 * 1024 * 1024
@@ -79,7 +82,31 @@ export default function App() {
   const assetStore = useMemo(() => createLocalAssetStore(setUploadProgress, showStatus), [])
 
   useEffect(() => {
+    let stopped = false
+
+    async function pollWritebackCommands() {
+      if (stopped) return
+
+      try {
+        const commands = await fetchPendingCommands('canvas.create_version')
+        for (const command of commands) {
+          if (command.type === 'canvas.create_version') {
+            await placeVersionFromCommand(command)
+          }
+        }
+      } catch {
+        // The local backend may still be starting; keep the canvas usable.
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void pollWritebackCommands()
+    }, 1000)
+    void pollWritebackCommands()
+
     return () => {
+      stopped = true
+      window.clearInterval(interval)
       if (statusTimeoutRef.current !== null) window.clearTimeout(statusTimeoutRef.current)
     }
   }, [])
@@ -121,6 +148,12 @@ export default function App() {
 
     await publishFrameContext(context)
     const promptPart = buildBoundedFrameContextPromptPart(context, 'canvas-frame-action')
+    await publishCodexFrameRequest({
+      frameId: context.frameId,
+      promptPart,
+      defaultInstruction:
+        'Use this bounded frame context as the task source. Generate or edit through Codex/active Skill, then call canvas.create_version to place the result back on the board.',
+    })
     await recordOperation({
       type: 'codex.frame_context_sent',
       frameId: context.frameId,
@@ -128,7 +161,124 @@ export default function App() {
       skillName: 'codex-media-generation',
       promptSource: 'canvas-frame-action',
     })
-    showStatus(`Sent frame context to Codex: ${context.media.length} media + ${context.annotations.length} annotations`, 4200)
+    showStatus(`Sent frame request to Codex: ${context.media.length} media + ${context.annotations.length} annotations`, 4200)
+  }
+
+  async function placeVersionFromCommand(command: CanvasCommand) {
+    const editor = editorRef.current
+    if (!editor) return
+
+    const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
+    const frame = command.frameId ? shapes.find((shape) => shape.id === command.frameId && shape.type === 'frame') : findContextFrame(editor, shapes)
+    if (!frame) {
+      showStatus('Codex writeback skipped: target frame not found.', 5200)
+      return
+    }
+
+    const context = await extractMaterializedFrameContext(editor, shapes, frame.id)
+    const anchor = context.anchorMedia
+    if (!anchor) {
+      showStatus('Codex writeback skipped: frame has no media anchor.', 5200)
+      return
+    }
+
+    const src = command.src ?? srcFromLocalPath(command.localPath)
+    if (!src) {
+      showStatus('Codex writeback skipped: command has no src or localPath.', 5200)
+      return
+    }
+
+    const childId = createShapeId()
+    const arrowId = createShapeId()
+    const outputSize = { w: anchor.bounds.w, h: anchor.bounds.h }
+    const placement = createVersionPlacement(context.bounds, outputSize, shapes.map(getShapeBounds))
+    const parentShapeId = anchor.shapeId as TLShapeId
+    const versionId = `version:codex-${Date.now()}`
+
+    editor.run(() => {
+      editor.createShapes([
+        {
+          id: childId,
+          type: MEDIA_IMAGE_SHAPE,
+          x: placement.childBounds.x,
+          y: placement.childBounds.y,
+          props: {
+            w: placement.childBounds.w,
+            h: placement.childBounds.h,
+            assetId: `asset:${childId}`,
+            versionId,
+            localPath: command.localPath ?? '',
+            src,
+            title: command.title ?? 'Codex generated version',
+            prompt: command.prompt ?? '',
+            provider: command.provider ?? 'codex',
+            model: command.model ?? '',
+            generationMode: command.generationMode ?? '',
+            requestId: command.id,
+            executionId: '',
+            status: command.status ?? 'succeeded',
+            skillName: command.skillName ?? 'codex-media-generation',
+          },
+        } satisfies Partial<MediaImageShape>,
+        {
+          id: arrowId,
+          type: 'arrow',
+          x: 0,
+          y: 0,
+          props: {
+            start: { x: placement.lineageArrow.start.x, y: placement.lineageArrow.start.y },
+            end: { x: placement.lineageArrow.end.x, y: placement.lineageArrow.end.y },
+            bend: 0,
+            dash: 'draw',
+            size: 'm',
+            fill: 'none',
+            color: 'blue',
+            arrowheadStart: 'none',
+            arrowheadEnd: 'arrow',
+            richText: toRichText(''),
+            labelPosition: 0.5,
+          },
+        },
+      ])
+      editor.createBindings([
+        {
+          id: createBindingId(),
+          type: 'arrow',
+          fromId: arrowId,
+          toId: parentShapeId,
+          props: {
+            terminal: 'start',
+            normalizedAnchor: { x: 1, y: 0.5 },
+            isExact: false,
+            isPrecise: true,
+          },
+        },
+        {
+          id: createBindingId(),
+          type: 'arrow',
+          fromId: arrowId,
+          toId: childId,
+          props: {
+            terminal: 'end',
+            normalizedAnchor: { x: 0, y: 0.5 },
+            isExact: false,
+            isPrecise: true,
+          },
+        },
+      ])
+      editor.select(childId)
+    })
+
+    await recordOperation({
+      type: 'codex.version_placed',
+      frameId: context.frameId,
+      parentShapeId,
+      childShapeId: childId,
+      arrowShapeId: arrowId,
+      command,
+    })
+    setSelectedMediaInfo(getSelectedMediaInfo(editor))
+    showStatus('Placed Codex generated version on canvas.', 3200)
   }
 
   return (
@@ -431,6 +581,13 @@ function containSize(size: { w: number; h: number }, max: { w: number; h: number
 
 function stringFromUnknown(value: unknown) {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function srcFromLocalPath(localPath?: string) {
+  if (!localPath) return undefined
+  if (localPath.startsWith('/asset-store/')) return localPath
+  if (localPath.startsWith('.codex-media-canvas/')) return `/asset-store/${localPath.slice('.codex-media-canvas/'.length)}`
+  return undefined
 }
 
 function findContextFrame(editor: Editor, shapes: CanvasShapeRecord[]) {
