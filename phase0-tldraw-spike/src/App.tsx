@@ -319,9 +319,11 @@ export default function App() {
         setSelectedMediaInfo(getSelectedMediaInfo(editor))
       })
       scheduleSelectionPublish(editor)
-      normalizeImportedMediaShapes(editor, Object.values(changes.added))
-      normalizeLegacyDefaultArrowBends(editor, Object.values(changes.added))
-      detachArrowBindings(editor, Object.values(changes.added))
+      if (!isRestoringCanvasRef.current) {
+        normalizeImportedMediaShapes(editor, Object.values(changes.added))
+        normalizeLegacyDefaultArrowBends(editor, Object.values(changes.added))
+        detachArrowBindings(editor, Object.values(changes.added))
+      }
       scheduleCanvasDocumentSave(editor)
     })
     editor.disposables.add(unsubscribe)
@@ -346,7 +348,6 @@ export default function App() {
       if (document.camera) editor.setCamera(document.camera, { immediate: true })
       normalizeLegacyDefaultArrowBends(editor)
       detachArrowBindings(editor)
-      void persistCanvasDocument(editor)
       showStatus('Restored local canvas.', 1800)
       void publishCurrentSelection(editor)
     } catch (error) {
