@@ -2657,7 +2657,8 @@ Changes made:
   - Keeps provider/prompt metadata off the generated image itself.
 - Strengthened the Skill transition boundary:
   - `GenerateMediaAction` now has a first-class `skillName`.
-  - Frame-button generation still executes in-browser/local-server today, but the produced action envelope is explicitly the `codex-media-generation` skill contract that Codex/MCP can consume next.
+  - Frame-button generation now queues a `canvas.agent_prompt` command through the local command bus first, then the browser claims that command and executes the `codex-media-generation` action contract.
+  - This is the transition version of the Codex Skill loop: the command path is Codex/MCP-shaped, while the local browser still performs the actual bounded canvas writeback.
 - Initialized the workspace as a git repository:
   - branch: `main`
   - `.env.local`, `.codex-media-canvas/`, node_modules, dist, `.next`, and local hidden workspace state are ignored.
@@ -2682,9 +2683,10 @@ Expected:
 - Selecting a generated media shape shows the asset info panel.
 - The generated image itself remains clean: no prompt/provider/model text stamped on top.
 - Operations include `skillName: "codex-media-generation"`.
+- Clicking the frame `Generate` button first enqueues `canvas.agent_prompt`; the browser then picks it up and runs generation shortly after.
 
 Next plan:
 
-- Make the frame generate shortcut queue a `canvas.agent_prompt` / Codex Skill command by default instead of directly running the local executor.
 - Add a polling/resume path for long-running Atlas jobs, so `processing` outputs can update themselves when Atlas finishes after the initial request window.
 - Improve the asset info panel from selected-only to selected-or-hover, without breaking tldraw native pointer interactions.
+- Replace the local command-bus handoff with true Codex runtime orchestration once the skill packaging is ready.

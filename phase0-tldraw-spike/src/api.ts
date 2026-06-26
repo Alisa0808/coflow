@@ -11,6 +11,14 @@ export type CanvasCommand = {
   generationMode?: string
 }
 
+export type QueueAgentPromptInput = {
+  frameId?: string
+  prompt: string
+  provider?: CanvasCommand['provider']
+  outputMediaType?: CanvasCommand['outputMediaType']
+  generationMode?: string
+}
+
 export type MaterializeAssetInput = {
   shapeId: string
   assetId: string
@@ -79,6 +87,17 @@ export async function fetchPendingCommands(): Promise<CanvasCommand[]> {
   const response = await fetch('/api/commands/pending')
   const payload = (await response.json()) as { commands?: CanvasCommand[] }
   return payload.commands ?? []
+}
+
+export async function queueAgentPrompt(input: QueueAgentPromptInput): Promise<CanvasCommand> {
+  const response = await fetch('/api/agent/prompt', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  const payload = (await response.json()) as { ok: boolean; command?: CanvasCommand; error?: string }
+  if (!payload.ok || !payload.command) throw new Error(payload.error ?? 'Failed to queue agent prompt.')
+  return payload.command
 }
 
 export async function materializeAsset(input: MaterializeAssetInput): Promise<MaterializedAsset> {

@@ -24,7 +24,15 @@ import {
 import { type GenerationMode, type OutputMediaType, type ProviderId } from './generationContract'
 import { GenerateMediaActionUtil } from './generateMediaActionUtil'
 import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil, type MediaImageShape } from './mediaShape'
-import { fetchPendingCommands, materializeAsset, publishFrameContext, publishGenerationRequest, recordOperation, runLatestGenerationRequest } from './api'
+import {
+  fetchPendingCommands,
+  materializeAsset,
+  publishFrameContext,
+  publishGenerationRequest,
+  queueAgentPrompt,
+  recordOperation,
+  runLatestGenerationRequest,
+} from './api'
 
 const shapeUtils = [MediaImageShapeUtil]
 const MAX_ASSET_SIZE_BYTES = 2 * 1024 * 1024 * 1024
@@ -120,6 +128,19 @@ export default function App() {
     })
     editor.disposables.add(unsubscribe)
     setStatus('')
+  }
+
+  async function queueFrameGenerate(frameId: string) {
+    try {
+      const command = await queueAgentPrompt({
+        frameId,
+        prompt: 'Generate a new version using the selected frame annotations.',
+        provider: 'atlas',
+      })
+      setStatus(`Queued Codex skill command ${command.id}`)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to queue Codex skill command.')
+    }
   }
 
   async function generateVersion(
@@ -329,7 +350,7 @@ export default function App() {
       ) : null}
       {selectedMediaInfo ? <MediaInfoPanel info={selectedMediaInfo} /> : null}
       {uploadProgress ? <UploadProgress progress={uploadProgress} /> : null}
-      {frameAction ? <FrameGenerateAction action={frameAction} onGenerate={generateVersion} /> : null}
+      {frameAction ? <FrameGenerateAction action={frameAction} onGenerate={queueFrameGenerate} /> : null}
     </div>
   )
 }
