@@ -193,7 +193,7 @@ export default function App() {
 
     await publishFrameContext(context)
     const promptPart = buildBoundedFrameContextPromptPart(context, 'canvas-frame-action')
-    await publishCodexFrameRequest({
+    const frameRequest = await publishCodexFrameRequest({
       frameId: context.frameId,
       promptPart,
       status: 'awaiting_user_instruction',
@@ -216,7 +216,13 @@ export default function App() {
       skillName: 'codex-media-generation',
       promptSource: 'canvas-frame-action',
     })
-    showStatus(`Sent frame context to Codex. Add instructions in the Codex chat to continue.`, 5200)
+    const fileName = frameRequest?.frameInput?.fileName
+    showStatus(
+      fileName
+        ? `Frame Input saved for Codex: ${fileName}`
+        : 'Sent frame context to Codex. Add instructions in the Codex chat to continue.',
+      5200,
+    )
   }
 
   async function placeVersionFromCommand(command: CanvasCommand) {

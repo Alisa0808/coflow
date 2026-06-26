@@ -47,7 +47,8 @@ The intended interactive path is:
 User clicks Send to Codex on a frame
 → browser extracts bounded frame context
 → writes latest frame context
-→ writes latest Codex frame request with status: awaiting_user_instruction
+→ writes a durable Frame Input JSON artifact
+→ writes latest Codex frame request with status: awaiting_user_instruction and frameInput.absolutePath
 → Codex reads canvas.get_frame_request / canvas.get_selection
 → Codex summarizes the task in conversation
 → user confirms or adds instructions
@@ -66,9 +67,15 @@ Frame button
 → extractMaterializedFrameContext(...)
 → publishFrameContext(...)
 → publishCodexFrameRequest({ status: "awaiting_user_instruction" })
+→ .codex-media-canvas/frame-inputs/frame-request-*.json
 → canvas.get_frame_request / canvas.get_selection
 → canvas.insert_media / canvas.create_version
 ```
+
+The Frame Input JSON is the current implementation of the “attachment-like”
+handoff. It is intentionally a real file so Codex can inspect and cite the exact
+bounded input. If the Codex desktop host later exposes a composer attachment API,
+`Send to Codex` should attach this same file to the user’s message composer.
 
 ## 4. Current file map
 

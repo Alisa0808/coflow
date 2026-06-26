@@ -18,10 +18,12 @@ const commandsRoot = join(storeRoot, 'commands')
 const assetsRoot = join(storeRoot, 'assets')
 const executionsRoot = join(storeRoot, 'executions')
 const uploadsRoot = join(storeRoot, 'uploads')
+const frameInputsRoot = join(storeRoot, 'frame-inputs')
 const latestFrameContextPath = join(metadataRoot, 'latest-frame-context.json')
 const latestSelectionPath = join(metadataRoot, 'latest-selection.json')
 const latestAgentPromptPath = join(metadataRoot, 'latest-agent-prompt.json')
 const latestCodexFrameRequestPath = join(metadataRoot, 'latest-codex-frame-request.json')
+const latestFrameInputPath = join(metadataRoot, 'latest-frame-input.json')
 const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
 const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
 const operationsLogPath = join(logsRoot, 'operations.jsonl')
@@ -37,6 +39,7 @@ await mkdir(commandsRoot, { recursive: true })
 await mkdir(assetsRoot, { recursive: true })
 await mkdir(executionsRoot, { recursive: true })
 await mkdir(uploadsRoot, { recursive: true })
+await mkdir(frameInputsRoot, { recursive: true })
 
 const server = createServer(async (request, response) => {
   try {
@@ -122,9 +125,10 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/api/codex/frame-requests' && request.method === 'POST') {
       const body = await readJsonBody(request)
+      const at = new Date().toISOString()
       const frameRequest = {
         id: body.id || `frame-request:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-        at: new Date().toISOString(),
+        at,
         source: body.source || 'canvas-frame-action',
         status: body.status || 'awaiting_user_instruction',
         frameId: body.frameId,
@@ -137,10 +141,17 @@ const server = createServer(async (request, response) => {
           body.defaultInstruction ||
           'Treat this as a pending Codex canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back.',
       }
+      const frameInput = await writeFrameInputArtifact(frameRequest)
+      frameRequest.frameInput = frameInput
       await writeJson(latestCodexFrameRequestPath, {
-        updatedAt: new Date().toISOString(),
+        updatedAt: at,
         source: 'phase0-tldraw-spike',
         request: frameRequest,
+      })
+      await writeJson(latestFrameInputPath, {
+        updatedAt: at,
+        source: 'phase0-tldraw-spike',
+        frameInput,
       })
       await appendOperation({ type: 'codex.frame_request.created', request: frameRequest })
       return sendJson(response, { ok: true, request: frameRequest })
@@ -148,6 +159,10 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/api/codex/frame-requests/latest' && request.method === 'GET') {
       return sendJson(response, await readJsonFile(latestCodexFrameRequestPath, null))
+    }
+
+    if (url.pathname === '/api/codex/frame-input/latest' && request.method === 'GET') {
+      return sendJson(response, await readJsonFile(latestFrameInputPath, null))
     }
 
     if (url.pathname === '/api/executions/run-latest' && request.method === 'POST') {
@@ -332,6 +347,36 @@ async function appendOperation(operation) {
 
 async function appendCommand(command) {
   await appendFile(pendingCommandsPath, `${JSON.stringify(command)}\n`)
+}
+
+async function writeFrameInputArtifact(frameRequest) {
+  const fileName = `${sanitizeFilePart(frameRequest.id || `frame-request-${Date.now()}`)}.json`
+  const absolutePath = join(frameInputsRoot, fileName)
+  const localPath = `.codex-media-canvas/frame-inputs/${fileName}`
+  const frameInput = {
+    kind: 'codex-media-canvas.frame-input',
+    version: 1,
+    fileName,
+    mimeType: 'application/json',
+    localPath,
+    absolutePath,
+    createdAt: frameRequest.at,
+    requestId: frameRequest.id,
+    source: frameRequest.source,
+    status: frameRequest.status,
+    frameId: frameRequest.frameId,
+    summary: frameRequest.summary,
+    defaultInstruction: frameRequest.defaultInstruction,
+    recommendedUserPrompt: frameRequest.recommendedUserPrompt,
+    promptPart: frameRequest.promptPart,
+  }
+  await writeJson(absolutePath, frameInput)
+  return {
+    fileName,
+    mimeType: frameInput.mimeType,
+    localPath,
+    absolutePath,
+  }
 }
 
 async function claimPendingCommands(type) {

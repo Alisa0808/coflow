@@ -310,6 +310,7 @@ Canvas exports context
 ```text
 User clicks Send to Codex on a frame
 → canvas publishes frame context and a pending Codex frame request
+→ canvas saves a Frame Input JSON file for Codex to inspect
 → Codex reads and summarizes the task context
 → user confirms or adds instructions in the Codex conversation
 → Codex chooses skill/provider/model and executes
@@ -317,6 +318,13 @@ User clicks Send to Codex on a frame
 ```
 
 它不是“点击后立即生成”。立即生成只能出现在用户已经显式进入某个持续 Skill / 自动执行模式、或按钮本身明确叫 `Generate version` 且上下文里已经有完整执行意图时。默认 `Send to Codex` 应该降低误触成本，避免不必要的 API / token / generation credit 消耗。
+
+Frame Input 文件是 `Send to Codex` 的附件化边界：
+
+- 当前实现先生成 `.codex-media-canvas/frame-inputs/frame-request-*.json`；
+- 最新 request 中必须包含 `frameInput.absolutePath`，让 Codex 可以像读取消息附件一样读取这份上下文；
+- 如果 Codex 宿主后续开放 composer attachment API，则 `Send to Codex` 应把同一份 Frame Input JSON 自动挂到 Codex 输入框，而不是发散出另一套上下文格式；
+- Frame Input 必须保留源素材路径、frame id、对象/标注、推荐用户提示与默认处理指令，作为后续 skill/provider 调用的唯一可信入口。
 
 首次进入画布的 example 策略也先记为待办：
 
@@ -1506,6 +1514,7 @@ interface CanvasAgentSkillManifest {
 |---|---|---|
 | tldraw 是否适合作为画布引擎 | Phase 0 | 是否支持真实 media shape、frame context、原生标注、父子连线、license 可接受 |
 | frame 按钮如何通知 Codex | Phase 0/1 | 能否让 Codex 可靠读取指定 frame context；避免把 request queue 变成主交互 |
+| 生成默认参数策略 | Phase 1/2 | 定义 `GenerationDefaultsPolicy`：图片默认 GPT image 2、视频默认 Seedance 2.0；比例优先从 selected media / active frame 推断；分辨率、质量、视频时长、FPS 有统一可解释默认，并在执行前可由 Codex 告知用户 |
 | Canvas Session Mode 存在哪里 | Phase 1/2 | 重启/新对话后能否 resume；是否需要同时存在 canvas metadata 与 Codex context |
 | Product Marketing Set 等 Skill 形态 | Phase 2 | 是否能作为 Codex agent skill 插拔安装并驱动画布，而不是白板按钮 |
 | Atlas 第一个真实 provider 链路 | Phase 3 | image edit / image-to-video 哪条链路最能证明 Atlas 价值 |
@@ -1513,6 +1522,45 @@ interface CanvasAgentSkillManifest {
 | 3D 深度 | Phase 4 | 先做生成/预览/视图标注/版本，不承诺专业 mesh 编辑 |
 | 云后端是否需要 | Phase 5 之后 | 是否出现协作、同步、托管、计费需求；v1 不需要 |
 | Skill marketplace | Phase 5 之后 | 先支持用户在 Codex 安装任意 skill，之后再考虑目录/市场 |
+
+待办：在 Phase 1/2 前补一个独立的 `generation-defaults` 模块或文档，集中定义图片、视频、3D 的默认输出参数，而不是让比例、分辨率、时长、质量散落在 provider adapter、skill prompt 或浏览器代码里。
+
+初始目标形态：
+
+```ts
+type GenerationDefaults = {
+  mediaType: 'image' | 'video' | 'model3d'
+  taskMode: 'text_to_image' | 'image_edit' | 'text_to_video' | 'reference_to_video' | 'model3d_generation'
+  model: string
+  aspectRatio: string
+  resolution: string
+  durationSec?: number
+  fps?: number
+  quality?: string
+  source: {
+    inferredFrom: 'selected_media' | 'active_frame' | 'user_prompt' | 'skill_default'
+    confidence: 'high' | 'medium' | 'low'
+  }
+}
+```
+
+默认策略草案：
+
+- 图片：默认模型 `GPT image 2`；有源素材时保持源素材比例；无源素材但有 frame 时使用 frame 比例；都没有时使用 `1:1`；默认分辨率 `2K` 或 provider 最近支持档位；默认质量 `medium`。
+- 视频：默认模型 `Seedance 2.0`；有图片/视频/音频/3D 等参考时走 `reference_to_video`；无参考时走 `text_to_video`；默认比例跟随参考素材，否则 `16:9`；默认时长 `5s`；默认 FPS `24`；默认分辨率先按成本策略选择 `720p` 或 `1080p`。
+- 3D：默认输出格式先按 `glb`；有参考图/视频帧时走 reference-to-3D；无参考时走 text-to-3D；画布上先插入预览缩略图和可下载资产 metadata。
+
+Codex 执行前应能把推断出的默认参数用自然语言反馈给用户，例如：
+
+```text
+我将使用 GPT image 2，保持当前源图的 9:16 比例，输出 2K 图片。
+```
+
+或：
+
+```text
+我将使用 Seedance 2.0，参考当前图片生成 5 秒 9:16 视频，默认 720p / 24fps。
+```
 
 ## 8. MVP 与路线规划
 

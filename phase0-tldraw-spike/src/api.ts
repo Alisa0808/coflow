@@ -59,6 +59,18 @@ export type CodexFrameRequestInput = {
   recommendedUserPrompt?: string
 }
 
+export type CodexFrameRequest = CodexFrameRequestInput & {
+  id: string
+  at: string
+  source: string
+  frameInput?: {
+    fileName: string
+    mimeType: string
+    localPath: string
+    absolutePath: string
+  }
+}
+
 export type ExecutionResult = {
   id: string
   requestId: string
@@ -112,7 +124,7 @@ export async function publishCodexFrameRequest(request: CodexFrameRequestInput) 
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(request),
   })
-  const payload = (await response.json()) as { ok: boolean; request?: Record<string, unknown>; error?: string }
+  const payload = (await response.json()) as { ok: boolean; request?: CodexFrameRequest; error?: string }
   if (!payload.ok) throw new Error(payload.error ?? 'Failed to publish Codex frame request.')
   return payload.request
 }
