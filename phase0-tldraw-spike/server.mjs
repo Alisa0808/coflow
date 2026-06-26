@@ -18,6 +18,7 @@ const commandsRoot = join(storeRoot, 'commands')
 const assetsRoot = join(storeRoot, 'assets')
 const executionsRoot = join(storeRoot, 'executions')
 const uploadsRoot = join(storeRoot, 'uploads')
+const canvasRoot = join(storeRoot, 'canvas')
 const frameInputsRoot = join(storeRoot, 'frame-inputs')
 const frameScreenshotsRoot = join(storeRoot, 'frame-screenshots')
 const latestFrameContextPath = join(metadataRoot, 'latest-frame-context.json')
@@ -28,6 +29,7 @@ const latestFrameInputPath = join(metadataRoot, 'latest-frame-input.json')
 const latestFrameScreenshotPath = join(metadataRoot, 'latest-frame-screenshot.json')
 const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
 const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
+const canvasDocumentPath = join(canvasRoot, 'document.json')
 const operationsLogPath = join(logsRoot, 'operations.jsonl')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
 
@@ -41,6 +43,7 @@ await mkdir(commandsRoot, { recursive: true })
 await mkdir(assetsRoot, { recursive: true })
 await mkdir(executionsRoot, { recursive: true })
 await mkdir(uploadsRoot, { recursive: true })
+await mkdir(canvasRoot, { recursive: true })
 await mkdir(frameInputsRoot, { recursive: true })
 await mkdir(frameScreenshotsRoot, { recursive: true })
 
@@ -83,6 +86,38 @@ const server = createServer(async (request, response) => {
       const body = await readJsonBody(request)
       await appendOperation(body)
       return sendJson(response, { ok: true })
+    }
+
+    if (url.pathname === '/api/canvas/document' && request.method === 'GET') {
+      return sendJson(response, {
+        ok: true,
+        document: await readJsonFile(canvasDocumentPath, null),
+      })
+    }
+
+    if (url.pathname === '/api/canvas/document' && (request.method === 'PUT' || request.method === 'POST')) {
+      const body = await readJsonBody(request)
+      if (!body?.snapshot || typeof body.snapshot !== 'object') {
+        return sendJson(response, { ok: false, error: 'Canvas document snapshot is required.' }, 400)
+      }
+
+      const document = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        source: 'phase0-tldraw-spike',
+        clientVersion: typeof body.clientVersion === 'string' ? body.clientVersion : undefined,
+        currentPageId: typeof body.currentPageId === 'string' ? body.currentPageId : undefined,
+        camera: normalizeCamera(body.camera),
+        snapshot: body.snapshot,
+      }
+      await writeJson(canvasDocumentPath, document)
+      await appendOperation({
+        type: 'canvas.document.saved',
+        currentPageId: document.currentPageId,
+        camera: document.camera,
+        clientVersion: document.clientVersion,
+      })
+      return sendJson(response, { ok: true, document })
     }
 
     if (url.pathname === '/api/generation-requests' && request.method === 'POST') {
@@ -494,6 +529,15 @@ function normalizeSelectionSnapshot(input) {
     activeFrame: input?.activeFrame && typeof input.activeFrame === 'object' ? input.activeFrame : undefined,
     updatedAt: typeof input?.updatedAt === 'string' ? input.updatedAt : new Date().toISOString(),
   }
+}
+
+function normalizeCamera(input) {
+  if (!input || typeof input !== 'object') return undefined
+  const x = Number(input.x)
+  const y = Number(input.y)
+  const z = Number(input.z)
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return undefined
+  return { x, y, z }
 }
 
 async function materializeAsset(input) {
@@ -999,8 +1043,8 @@ function safeDecodeURIComponent(value) {
   }
 }
 
-function sendJson(response, data) {
-  response.writeHead(200, { 'content-type': 'application/json' })
+function sendJson(response, data, statusCode = 200) {
+  response.writeHead(statusCode, { 'content-type': 'application/json' })
   response.end(JSON.stringify(data, null, 2))
 }
 

@@ -115,6 +115,39 @@ export type ExecutionResult = {
   note?: string
 }
 
+export type PersistedCanvasDocument = {
+  version: 1
+  updatedAt: string
+  source: string
+  clientVersion?: string
+  currentPageId?: string
+  camera?: {
+    x: number
+    y: number
+    z: number
+  }
+  snapshot: unknown
+}
+
+export async function loadCanvasDocument(): Promise<PersistedCanvasDocument | null> {
+  const response = await fetch('/api/canvas/document')
+  const payload = (await response.json()) as { ok: boolean; document?: PersistedCanvasDocument | null }
+  return payload.document ?? null
+}
+
+export async function saveCanvasDocument(input: {
+  clientVersion?: string
+  currentPageId?: string
+  camera?: PersistedCanvasDocument['camera']
+  snapshot: unknown
+}) {
+  await fetch('/api/canvas/document', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
 export async function publishFrameContext(context: FrameContext) {
   await fetch('/api/frame-context', {
     method: 'POST',

@@ -28,11 +28,13 @@ import {
 import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil, type MediaImageShape } from './mediaShape'
 import {
   fetchPendingCommands,
+  loadCanvasDocument,
   materializeAsset,
   publishCodexFrameRequest,
   publishFrameContext,
   publishSelectionSnapshot,
   recordOperation,
+  saveCanvasDocument,
   saveFrameScreenshot,
   type CanvasCommand,
   type FrameScreenshot,
@@ -44,6 +46,7 @@ const IMPORTED_MEDIA_INITIAL_DISPLAY_FIT = { w: 1280, h: 720 }
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 32 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024
 const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
+const DEFAULT_ARROW_BEND = 80
 
 type FrameActionState = {
   frameId: string
@@ -84,6 +87,8 @@ export default function App() {
   const frameActionRafRef = useRef<number | null>(null)
   const statusTimeoutRef = useRef<number | null>(null)
   const selectionPublishTimeoutRef = useRef<number | null>(null)
+  const canvasSaveTimeoutRef = useRef<number | null>(null)
+  const isRestoringCanvasRef = useRef(false)
   const lastPublishedSelectionRef = useRef('')
   const [status, setStatus] = useState('')
   const [frameAction, setFrameAction] = useState<FrameActionState>(null)
@@ -132,12 +137,13 @@ export default function App() {
       window.clearInterval(interval)
       if (statusTimeoutRef.current !== null) window.clearTimeout(statusTimeoutRef.current)
       if (selectionPublishTimeoutRef.current !== null) window.clearTimeout(selectionPublishTimeoutRef.current)
+      if (canvasSaveTimeoutRef.current !== null) window.clearTimeout(canvasSaveTimeoutRef.current)
     }
   }, [])
 
   function onMount(editor: Editor) {
     editorRef.current = editor
-    seedCanvas(editor)
+    void restoreCanvasDocument(editor)
     setFrameAction(getSelectedFrameAction(editor))
     setSelectedMediaInfo(getSelectedMediaInfo(editor))
     const unsubscribe = editor.store.listen(({ changes }) => {
@@ -150,10 +156,66 @@ export default function App() {
       })
       scheduleSelectionPublish(editor)
       normalizeImportedMediaShapes(editor, Object.values(changes.added))
+      normalizeNewArrows(editor, Object.values(changes.added))
+      scheduleCanvasDocumentSave(editor)
     })
     editor.disposables.add(unsubscribe)
     void publishCurrentSelection(editor)
     setStatus('')
+  }
+
+  async function restoreCanvasDocument(editor: Editor) {
+    isRestoringCanvasRef.current = true
+    try {
+      const document = await loadCanvasDocument()
+      if (!document?.snapshot) return
+
+      editor.store.loadStoreSnapshot(document.snapshot as never)
+      if (document.currentPageId) {
+        try {
+          editor.setCurrentPage(document.currentPageId as never)
+        } catch {
+          // If the saved page no longer exists after a schema migration, keep tldraw's default page.
+        }
+      }
+      if (document.camera) editor.setCamera(document.camera, { immediate: true })
+      showStatus('Restored local canvas.', 1800)
+      void publishCurrentSelection(editor)
+    } catch (error) {
+      await recordOperation({
+        type: 'canvas.restore_failed',
+        error: error instanceof Error ? error.message : String(error),
+      })
+      showStatus('Local canvas restore failed; opened a blank board.', 4200)
+    } finally {
+      isRestoringCanvasRef.current = false
+    }
+  }
+
+  function scheduleCanvasDocumentSave(editor: Editor) {
+    if (isRestoringCanvasRef.current) return
+    const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
+    if (canvasSaveTimeoutRef.current !== null) appWindow.clearTimeout(canvasSaveTimeoutRef.current)
+    canvasSaveTimeoutRef.current = appWindow.setTimeout(() => {
+      canvasSaveTimeoutRef.current = null
+      void persistCanvasDocument(editor)
+    }, 700)
+  }
+
+  async function persistCanvasDocument(editor: Editor) {
+    try {
+      await saveCanvasDocument({
+        clientVersion: CANVAS_CLIENT_VERSION,
+        currentPageId: editor.getCurrentPageId(),
+        camera: editor.getCamera(),
+        snapshot: editor.store.getStoreSnapshot('all'),
+      })
+    } catch (error) {
+      await recordOperation({
+        type: 'canvas.save_failed',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   function scheduleSelectionPublish(editor: Editor) {
@@ -354,7 +416,7 @@ export default function App() {
           props: {
             start: { x: placement.lineageArrow.start.x, y: placement.lineageArrow.start.y },
             end: { x: placement.lineageArrow.end.x, y: placement.lineageArrow.end.y },
-            bend: 0,
+            bend: DEFAULT_ARROW_BEND,
             dash: 'draw',
             size: 'm',
             fill: 'none',
@@ -622,6 +684,27 @@ function normalizeImportedMediaShapes(editor: Editor, records: unknown[]) {
   focusImportedMedia(editor)
 }
 
+function normalizeNewArrows(editor: Editor, records: unknown[]) {
+  const updates: TLShapePartial[] = []
+  for (const record of records) {
+    const shape = record as TLShape
+    if (shape.typeName !== 'shape' || shape.type !== 'arrow') continue
+    const props = shape.props as { bend?: number }
+    if (typeof props.bend === 'number' && props.bend !== 0) continue
+    updates.push({
+      id: shape.id,
+      type: 'arrow',
+      props: {
+        bend: DEFAULT_ARROW_BEND,
+      },
+    })
+  }
+
+  if (updates.length > 0) {
+    editor.run(() => editor.updateShapes(updates), { history: 'ignore' })
+  }
+}
+
 function focusImportedMedia(editor: Editor) {
   const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
   appWindow.requestAnimationFrame(() => {
@@ -728,84 +811,6 @@ function findContextFrame(editor: Editor, shapes: CanvasShapeRecord[]) {
   if (selectedInsideFrame) return selectedInsideFrame
 
   return shapes.find((shape) => shape.type === 'frame')
-}
-
-function seedCanvas(editor: Editor) {
-  if (editor.getCurrentPageShapes().some((shape) => shape.type === MEDIA_IMAGE_SHAPE)) return
-
-  const frameId = createShapeId('task-frame')
-  const mediaId = createShapeId('source-media')
-  const boxId = createShapeId('annotation-box')
-  const noteId = createShapeId('annotation-note')
-
-  editor.run(() => {
-    editor.createShapes([
-      {
-        id: frameId,
-        type: 'frame',
-        x: 56,
-        y: 80,
-        props: {
-          w: 640,
-          h: 400,
-          name: 'Product hero edit task',
-          color: 'blue',
-        },
-      },
-      {
-        id: mediaId,
-        type: MEDIA_IMAGE_SHAPE,
-        x: 96,
-        y: 140,
-        props: {
-          w: 360,
-          h: 240,
-          assetId: 'asset:source-product',
-          versionId: 'version:source-product-v1',
-          localPath: '.codex-media-canvas/assets/images/source-product.svg',
-          src: sourceImageSvg(),
-          mediaType: 'image',
-          title: 'Source product image',
-          prompt: 'Original product hero image',
-          provider: 'imported',
-          model: '',
-          generationMode: '',
-          requestId: '',
-          executionId: '',
-          status: 'imported',
-          skillName: '',
-        },
-      } satisfies Partial<MediaImageShape>,
-      {
-        id: boxId,
-        type: 'geo',
-        x: 320,
-        y: 168,
-        props: {
-          w: 96,
-          h: 92,
-          geo: 'rectangle',
-          color: 'red',
-          dash: 'draw',
-          size: 'm',
-          fill: 'none',
-        },
-      },
-      {
-        id: noteId,
-        type: 'note',
-        x: 462,
-        y: 164,
-        props: {
-          color: 'yellow',
-          size: 'm',
-          richText: toRichText('Make this area cleaner and more premium.'),
-        },
-      },
-    ])
-    editor.select(frameId)
-    editor.zoomToSelection()
-  })
 }
 
 function toCanvasShapeRecords(shapes: TLShape[]): CanvasShapeRecord[] {
@@ -1329,28 +1334,4 @@ function normalizeProps(shape: TLShape): Record<string, unknown> {
     props.h = typeof props.h === 'number' ? props.h : 160
   }
   return props
-}
-
-function sourceImageSvg() {
-  return svgDataUrl(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480">
-      <defs>
-        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop stop-color="#0f172a"/>
-          <stop offset="1" stop-color="#334155"/>
-        </linearGradient>
-      </defs>
-      <rect width="720" height="480" rx="34" fill="url(#bg)"/>
-      <circle cx="204" cy="242" r="118" fill="#93c5fd" opacity=".28"/>
-      <rect x="254" y="128" width="192" height="248" rx="42" fill="#f8fafc"/>
-      <rect x="286" y="166" width="128" height="172" rx="30" fill="#1d4ed8"/>
-      <circle cx="530" cy="144" r="44" fill="#f97316"/>
-      <text x="70" y="74" fill="#e2e8f0" font-family="Inter,Arial" font-size="34" font-weight="700">Source product</text>
-      <text x="70" y="420" fill="#cbd5e1" font-family="Inter,Arial" font-size="24">Frame + annotations should scope the task</text>
-    </svg>
-  `)
-}
-
-function svgDataUrl(svg: string) {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`
 }
