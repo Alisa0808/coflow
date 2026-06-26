@@ -79,6 +79,7 @@ export type FrameScreenshot = {
   absolutePath: string
   frameId: string
   frameName?: string
+  includedShapeIds?: string[]
   bytes: number
 }
 
@@ -140,13 +141,14 @@ export async function publishCodexFrameRequest(request: CodexFrameRequestInput) 
   return payload.request
 }
 
-export async function saveFrameScreenshot(input: { frameId: string; frameName?: string; blob: Blob }): Promise<FrameScreenshot> {
+export async function saveFrameScreenshot(input: { frameId: string; frameName?: string; includedShapeIds?: string[]; blob: Blob }): Promise<FrameScreenshot> {
   const response = await fetch('/api/codex/frame-screenshots', {
     method: 'POST',
     headers: {
       'content-type': input.blob.type || 'image/png',
       'x-frame-id': input.frameId,
       'x-frame-name': encodeURIComponent(input.frameName ?? ''),
+      'x-included-shape-ids': encodeURIComponent(JSON.stringify(input.includedShapeIds ?? [])),
     },
     body: input.blob,
   })

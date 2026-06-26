@@ -199,7 +199,7 @@ export default function App() {
       return
     }
 
-    const frameScreenshot = await copyAndSaveFrameScreenshot(editor, frame.id as TLShapeId, context.frameName)
+    const frameScreenshot = await copyAndSaveFrameScreenshot(editor, shapes, frame.id, context.frameName)
 
     await publishFrameContext(context)
     const promptPart = buildBoundedFrameContextPromptPart(context, 'canvas-frame-action')
@@ -235,9 +235,15 @@ export default function App() {
     )
   }
 
-  async function copyAndSaveFrameScreenshot(editor: Editor, frameId: TLShapeId, frameName: string): Promise<FrameScreenshotResult> {
+  async function copyAndSaveFrameScreenshot(
+    editor: Editor,
+    shapes: CanvasShapeRecord[],
+    frameId: string,
+    frameName: string,
+  ): Promise<FrameScreenshotResult> {
+    const exportShapeIds = getFrameExportShapeIds(shapes, frameId)
     const blobPromise = editor
-      .toImage([frameId], {
+      .toImage(exportShapeIds, {
         format: 'png',
         background: true,
         padding: 24,
@@ -246,7 +252,14 @@ export default function App() {
       .then(({ blob }) => (blob.type === 'image/png' ? blob : new Blob([blob], { type: 'image/png' })))
 
     const clipboardPromise = writePngBlobPromiseToClipboard(editor, blobPromise)
-    const savePromise = blobPromise.then((blob) => saveFrameScreenshot({ frameId, frameName, blob }))
+    const savePromise = blobPromise.then((blob) =>
+      saveFrameScreenshot({
+        frameId,
+        frameName,
+        includedShapeIds: exportShapeIds,
+        blob,
+      }),
+    )
     const [clipboardResult, saveResult] = await Promise.allSettled([clipboardPromise, savePromise])
     const clipboardCopied = clipboardResult.status === 'fulfilled'
     const screenshot = saveResult.status === 'fulfilled' ? saveResult.value : undefined
@@ -265,6 +278,7 @@ export default function App() {
       await recordOperation({
         type: 'codex.frame_screenshot.partial_failure',
         frameId,
+        exportShapeIds,
         clipboardCopied,
         screenshotSaved: Boolean(screenshot),
         error,
@@ -1189,6 +1203,50 @@ function createUploadProgress(file: File, loaded: number, status: NonNullable<Up
     percent: Math.min(100, Math.round((loaded / total) * 100)),
     status,
   }
+}
+
+function getFrameExportShapeIds(shapes: CanvasShapeRecord[], frameId: string): TLShapeId[] {
+  const frame = shapes.find((shape) => shape.id === frameId && shape.type === 'frame')
+  if (!frame) return [frameId as TLShapeId]
+  const frameBounds = getShapeBounds(frame)
+  return shapes
+    .filter((shape) => shape.id === frameId || shapeBelongsToFrameByGeometry(shape, frame, frameBounds))
+    .map((shape) => shape.id as TLShapeId)
+}
+
+function shapeBelongsToFrameByGeometry(shape: CanvasShapeRecord, frame: CanvasShapeRecord, frameBounds: Bounds) {
+  if (shape.id === frame.id) return true
+  if (shape.parentId === frame.id) return true
+  const bounds = getShapeBounds(shape)
+  if (
+    bounds.x >= frameBounds.x &&
+    bounds.y >= frameBounds.y &&
+    bounds.x + bounds.w <= frameBounds.x + frameBounds.w &&
+    bounds.y + bounds.h <= frameBounds.y + frameBounds.h
+  ) {
+    return true
+  }
+
+  const center = {
+    x: bounds.x + bounds.w / 2,
+    y: bounds.y + bounds.h / 2,
+  }
+  if (
+    center.x >= frameBounds.x &&
+    center.x <= frameBounds.x + frameBounds.w &&
+    center.y >= frameBounds.y &&
+    center.y <= frameBounds.y + frameBounds.h
+  ) {
+    return true
+  }
+
+  return overlapArea(bounds, frameBounds) / Math.max(1, bounds.w * bounds.h) >= 0.35
+}
+
+function overlapArea(a: Bounds, b: Bounds) {
+  const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x))
+  const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y))
+  return x * y
 }
 
 async function sourceToDataUrl(src: string) {

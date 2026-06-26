@@ -69,7 +69,8 @@ The concrete send-to-Codex chain in code is:
 ```text
 Frame button
 → sendFrameToCodex(...)
-→ editor.toImage([frameId], { format: "png" })
+→ collect frame + geometrically contained shape ids
+→ editor.toImage(exportShapeIds, { format: "png" })
 → navigator.clipboard.write([ClipboardItem({ "image/png": blobPromise })])
 → extractMaterializedFrameContext(...)
 → publishFrameContext(...)
@@ -88,6 +89,12 @@ the system clipboard and tell the user to paste it into the Codex composer. If
 the Codex desktop host exposes a composer attachment API, `Send to Codex` should
 paste/attach the same screenshot automatically, while Codex still uses the Frame
 Input JSON as the primary execution input.
+
+Important implementation detail: the screenshot export must not depend on
+tldraw frame parenting. Users can visually place media and annotations inside a
+frame without making them children of that frame. `Send to Codex` therefore
+exports the selected frame plus shapes that are geometrically inside/overlapping
+the frame, matching the same bounded-context rule used by Frame Input.
 
 ## 4. Current file map
 

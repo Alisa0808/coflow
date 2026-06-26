@@ -401,6 +401,7 @@ async function writeFrameInputArtifact(frameRequest) {
 async function saveFrameScreenshot(request) {
   const frameId = String(request.headers['x-frame-id'] || 'frame')
   const frameName = safeDecodeURIComponent(request.headers['x-frame-name'] || '')
+  const includedShapeIds = parseJsonHeader(request.headers['x-included-shape-ids'], [])
   const chunks = []
   for await (const chunk of request) chunks.push(chunk)
   const buffer = Buffer.concat(chunks)
@@ -418,7 +419,17 @@ async function saveFrameScreenshot(request) {
     absolutePath,
     frameId,
     frameName,
+    includedShapeIds,
     bytes: buffer.length,
+  }
+}
+
+function parseJsonHeader(value, fallback) {
+  if (!value) return fallback
+  try {
+    return JSON.parse(safeDecodeURIComponent(value))
+  } catch {
+    return fallback
   }
 }
 
