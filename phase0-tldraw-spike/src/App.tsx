@@ -196,8 +196,18 @@ export default function App() {
     await publishCodexFrameRequest({
       frameId: context.frameId,
       promptPart,
+      status: 'awaiting_user_instruction',
+      summary: {
+        frameName: context.frameName,
+        mediaCount: context.media.length,
+        annotationCount: context.annotations.length,
+        anchorMediaId: context.anchorMedia.shapeId,
+        annotationTexts: context.annotations.map((annotation) => annotation.text).filter((text): text is string => Boolean(text)),
+      },
       defaultInstruction:
-        'Use this bounded frame context as the task source. Generate or edit through Codex/active Skill, then call canvas.create_version to place the result back on the board.',
+        'Treat this as a pending Codex canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back on the board.',
+      recommendedUserPrompt:
+        'I have sent this frame to Codex. Please tell me what you want to create or edit from this frame, or say “generate a version from these annotations”.',
     })
     await recordOperation({
       type: 'codex.frame_context_sent',
@@ -206,7 +216,7 @@ export default function App() {
       skillName: 'codex-media-generation',
       promptSource: 'canvas-frame-action',
     })
-    showStatus(`Sent frame request to Codex: ${context.media.length} media + ${context.annotations.length} annotations`, 4200)
+    showStatus(`Sent frame context to Codex. Add instructions in the Codex chat to continue.`, 5200)
   }
 
   async function placeVersionFromCommand(command: CanvasCommand) {

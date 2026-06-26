@@ -48,6 +48,15 @@ export type CodexFrameRequestInput = {
   frameId: string
   promptPart: Record<string, unknown>
   defaultInstruction: string
+  status?: 'awaiting_user_instruction' | 'ready_to_execute'
+  summary?: {
+    frameName?: string
+    mediaCount: number
+    annotationCount: number
+    anchorMediaId?: string
+    annotationTexts?: string[]
+  }
+  recommendedUserPrompt?: string
 }
 
 export type ExecutionResult = {

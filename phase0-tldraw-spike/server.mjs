@@ -126,11 +126,16 @@ const server = createServer(async (request, response) => {
         id: body.id || `frame-request:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         at: new Date().toISOString(),
         source: body.source || 'canvas-frame-action',
+        status: body.status || 'awaiting_user_instruction',
         frameId: body.frameId,
+        summary: body.summary,
         promptPart: body.promptPart,
+        recommendedUserPrompt:
+          body.recommendedUserPrompt ||
+          'Review this frame context in Codex, add any missing intent, then ask Codex to generate or edit and write the result back to the canvas.',
         defaultInstruction:
           body.defaultInstruction ||
-          'Use canvas.get_frame_context for this frame, decide the right skill/provider/model in Codex, then call canvas.create_version to write the result back.',
+          'Treat this as a pending Codex canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back.',
       }
       await writeJson(latestCodexFrameRequestPath, {
         updatedAt: new Date().toISOString(),

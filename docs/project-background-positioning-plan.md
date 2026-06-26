@@ -305,6 +305,26 @@ Canvas exports context
 
 > Codex 能准确知道用户选中了什么、frame 里有哪些上下文、源素材在哪里、标注是什么、输出应当写回哪里，并能把生成结果作为可追踪版本放回画布。
 
+`Send to Codex` 的默认语义也必须固定：
+
+```text
+User clicks Send to Codex on a frame
+→ canvas publishes frame context and a pending Codex frame request
+→ Codex reads and summarizes the task context
+→ user confirms or adds instructions in the Codex conversation
+→ Codex chooses skill/provider/model and executes
+→ Codex writes the result back to the canvas
+```
+
+它不是“点击后立即生成”。立即生成只能出现在用户已经显式进入某个持续 Skill / 自动执行模式、或按钮本身明确叫 `Generate version` 且上下文里已经有完整执行意图时。默认 `Send to Codex` 应该降低误触成本，避免不必要的 API / token / generation credit 消耗。
+
+首次进入画布的 example 策略也先记为待办：
+
+- 正式开源时，不应把 Phase 0 的 seeded product demo 强行展示给所有用户；
+- 首次进入可以出现一个 example / sample project / onboarding canvas；
+- example 的具体内容后续再定；
+- 默认空白画布、开发模式自动 seed、以及 `Load example` 按钮三种形态需要在正式发布前确认。
+
 ## 3. 产品定位
 
 ### 3.1 推荐定位

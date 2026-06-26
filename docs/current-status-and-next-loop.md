@@ -36,37 +36,38 @@ The official tldraw agent starter proved that an agent can understand and act on
 
 ## 3. Current working chain
 
-The current local spike can already do this:
+The current local spike now separates two paths:
+
+1. `Send to Codex` publishes context and waits for Codex/user instructions.
+2. explicit writeback tools place Codex-generated media back onto the canvas.
+
+The intended interactive path is:
 
 ```text
-POST /api/agent/prompt
-  prompt: "Create a premium revised version from this frame."
-  provider: "atlas" | "mock-provider" | "seedance" | "kling"
-  outputMediaType: "image" | "video"
-
-→ browser claims the command
-→ finds selected/default frame
-→ extracts media + annotations inside that frame
-→ builds bounded_frame_context
-→ builds generate-media action
-→ converts action into ProviderReadyGenerationRequest
-→ writes latest request metadata
-→ runs local executor
-→ creates mock output or attempts configured provider endpoint
-→ writes generated preview back to canvas
-→ records lineage and operation log
+User clicks Send to Codex on a frame
+→ browser extracts bounded frame context
+→ writes latest frame context
+→ writes latest Codex frame request with status: awaiting_user_instruction
+→ Codex reads canvas.get_frame_request / canvas.get_selection
+→ Codex summarizes the task in conversation
+→ user confirms or adds instructions
+→ Codex executes the relevant skill/provider
+→ Codex calls canvas.insert_media / canvas.create_version
+→ browser places the result back with lineage
 ```
 
-The concrete chain in code is:
+The older `canvas.agent_prompt` / provider-executor chain is still available as a spike/testing path, but it is no longer the primary product interaction.
+
+The concrete send-to-Codex chain in code is:
 
 ```text
-canvas.agent_prompt
-→ buildBoundedFrameContextPromptPart(...)
-→ GenerateMediaActionUtil.create(...)
-→ GenerateMediaActionUtil.toGenerationRequest(...)
-→ publishGenerationRequest(...)
-→ runLatestGenerationRequest(...)
-→ create child media shape + arrow binding
+Frame button
+→ sendFrameToCodex(...)
+→ extractMaterializedFrameContext(...)
+→ publishFrameContext(...)
+→ publishCodexFrameRequest({ status: "awaiting_user_instruction" })
+→ canvas.get_frame_request / canvas.get_selection
+→ canvas.insert_media / canvas.create_version
 ```
 
 ## 4. Current file map
@@ -100,6 +101,8 @@ canvas.agent_prompt
 - Provider payload generation for Atlas / Seedance / Kling.
 - Canvas writeback with generated media shape and lineage arrow.
 - Metadata and operation logging.
+- Installable local Codex plugin exposing canvas MCP tools.
+- `Send to Codex` frame requests that wait for conversation instructions instead of auto-generating.
 
 ### Still mock / incomplete
 
@@ -110,7 +113,7 @@ canvas.agent_prompt
 - No real async polling for long-running provider jobs.
 - No production result materialization from remote URLs.
 - No first-class 3D asset shape / preview / provider mode yet.
-- No installable Codex Skill package yet.
+- First-run example/onboarding content is not finalized; current seeded demo is still a Phase 0 test fixture.
 
 ## 6. The next visible loop
 
