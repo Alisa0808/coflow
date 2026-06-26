@@ -2690,3 +2690,78 @@ Next plan:
 - Add a polling/resume path for long-running Atlas jobs, so `processing` outputs can update themselves when Atlas finishes after the initial request window.
 - Improve the asset info panel from selected-only to selected-or-hover, without breaking tldraw native pointer interactions.
 - Replace the local command-bus handoff with true Codex runtime orchestration once the skill packaging is ready.
+
+## 2026-06-26 — Fix stuck status toast and annotation context loss
+
+User report:
+
+- Upload and generation status toasts stayed visible and did not disappear.
+- Atlas returned an unrelated image even though the selected frame contained a source image plus visual/text annotations.
+- Clarification needed: whether every object and annotation on the whiteboard is currently used as model input.
+
+Root cause:
+
+- The current product contract is bounded context, not whole-whiteboard context:
+  - selected frame / chosen frame is read;
+  - media and annotations inside that frame are extracted;
+  - unrelated objects elsewhere on the board are intentionally ignored.
+- The latest failed generation had a valid source image reference, but the extracted frame context contained only one geometric rectangle and no text prompt.
+- Because the text annotation was not included, the provider prompt fell back to a generic frame prompt.
+- The provider currently receives:
+  - source media reference;
+  - structured annotation text / metadata;
+  - synthesized text summaries for non-text annotations.
+- The provider does not yet receive a rendered visual composite of the full frame, so a drawn box/arrow is only model-visible through structured prompt text unless we add `annotation.render_composite`.
+
+Changes made:
+
+- Status toasts now go through a single `showStatus` helper and auto-dismiss after a short duration.
+- Frame context inclusion is less brittle:
+  - shapes parented to the frame are included;
+  - fully contained shapes are included;
+  - shapes whose center point is inside the frame are included;
+  - mostly-overlapping edge annotations are included.
+- Non-text annotations now contribute useful prompt lines:
+  - geometric boxes describe the target region;
+  - arrows describe a pointed target region;
+  - freehand drawings describe a marked target region.
+- Atlas image-edit prompt is stricter:
+  - preserve the exact original subject, identity, pose, composition, medium, and style;
+  - do not replace an illustration with a photo or a product image with a webpage;
+  - apply only the requested frame annotations.
+- Added regression tests for edge-crossing annotations and non-text geometric prompt summaries.
+- Restarted the local server so the updated server-side Atlas prompt wrapper is active.
+
+Verification:
+
+- `npm test`: passed, 18/18.
+- `npm run build`: passed.
+- `node --check server.mjs`: passed.
+- `node --check mcp-server.mjs`: passed.
+- Restarted local server at `http://127.0.0.1:5176/`.
+- Server startup logs show `Atlas provider key: configured`.
+
+Manual acceptance checklist:
+
+1. Refresh `http://127.0.0.1:5176/`.
+2. Use a frame that contains:
+   - one source image;
+   - one visible text/note annotation, e.g. `make her hair pink`;
+   - optional rectangle/arrow annotations.
+3. Click the frame generation affordance.
+4. Inspect `.codex-media-canvas/metadata/latest-generation-request.json` and `.codex-media-canvas/metadata/latest-execution-result.json`.
+
+Expected:
+
+- Upload/generation status pill disappears automatically.
+- `latest-generation-request.json` includes the source image reference.
+- `latest-generation-request.json` prompt includes the text annotation.
+- If the frame contains only a box/arrow with no text, the prompt still includes a synthesized target-region description.
+- `latest-execution-result.json` uses `provider: "atlas"` and `mockFallback: false` when Atlas succeeds.
+- Visual output should preserve the original source subject and apply the annotation. If it still ignores the marked region, the next fix is to send a rendered frame composite or mask to the provider, not more generic prompt text.
+
+Next plan:
+
+- Add `annotation.render_composite`: render the selected frame into an image that includes the source media, arrows, boxes, notes, and spatial layout, then pass it as a visual reference/mask where the provider supports it.
+- Add polling/resume for long-running Atlas jobs so processing placeholders can update after the initial request returns.
+- Move the current command-bus bridge closer to the final Codex Skill runtime path.

@@ -122,7 +122,8 @@ function buildAtlasGenerationPayload(payload, { outputType, prompt, uploadedRefe
 function buildImageEditPrompt(prompt) {
   const trimmedPrompt = String(prompt || '').trim()
   return [
-    'Edit the provided source image. Preserve the original subject, identity, pose, composition, and background unless the canvas annotations explicitly ask to change them.',
+    'Edit the provided source image. Preserve the exact original subject, identity, pose, composition, medium, and visual style unless the canvas annotations explicitly ask to change them.',
+    'If the source is an illustration, keep it as an illustration. If it is a product photo, keep it as a product photo. Never replace the source with a new unrelated person, object, product, web page, or scene.',
     'Apply only the requested canvas annotations and user instructions. Do not replace the image with a new unrelated product, web page, scene, or layout.',
     '',
     trimmedPrompt || 'Create a faithful revised version from the selected frame.',

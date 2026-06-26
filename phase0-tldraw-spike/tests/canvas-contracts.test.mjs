@@ -132,6 +132,67 @@ test('extractFrameContext treats native text richText as frame annotation prompt
   assert.equal(request.instructions.prompt, 'only make her hair pink')
 })
 
+test('extractFrameContext includes annotations whose center is inside the frame even if bounds cross the edge', () => {
+  const context = extractFrameContext(
+    [
+      { id: 'frame:edge-task', type: 'frame', x: 0, y: 0, props: { w: 600, h: 500, name: 'Edge annotation task' } },
+      {
+        id: 'shape:native-image',
+        type: 'image',
+        x: 80,
+        y: 80,
+        props: {
+          w: 320,
+          h: 360,
+          assetId: 'asset:native-image',
+        },
+      },
+      {
+        id: 'shape:text-edge',
+        type: 'text',
+        x: 460,
+        y: 220,
+        props: {
+          w: 220,
+          h: 48,
+          text: 'make her hair pink',
+        },
+      },
+    ],
+    'frame:edge-task',
+  )
+
+  assert.equal(context.annotations.length, 1)
+  assert.equal(context.annotations[0].text, 'make her hair pink')
+})
+
+test('createProviderReadyGenerationRequest summarizes non-text geometric annotations', () => {
+  const request = createProviderReadyGenerationRequest({
+    createdAt: '2026-06-26T00:00:00.000Z',
+    childShapeId: 'shape:child',
+    arrowShapeId: 'shape:arrow',
+    outputLocalPath: '.codex-media-canvas/assets/images/output.svg',
+    context: {
+      frameId: 'shape:frame',
+      frameName: 'Box-only frame',
+      bounds: { x: 0, y: 0, w: 600, h: 500 },
+      anchorMedia: {
+        shapeId: 'shape:image',
+        shapeType: 'image',
+        assetId: 'asset:image',
+        versionId: 'shape:image:v1',
+        localPath: '.codex-media-canvas/assets/images/source.png',
+        bounds: { x: 80, y: 80, w: 320, h: 360 },
+      },
+      media: [],
+      annotations: [{ shapeId: 'shape:box', type: 'geo', bounds: { x: 160, y: 140, w: 280, h: 180 } }],
+    },
+  })
+
+  assert.match(request.instructions.prompt, /drawn geometric annotation/)
+  assert.match(request.instructions.prompt, /target region/)
+})
+
 test('createVersionPlacement puts child to the right and points lineage arrow toward it', () => {
   const placement = createVersionPlacement({ x: 10, y: 20, w: 300, h: 200 }, { w: 320, h: 180 })
 

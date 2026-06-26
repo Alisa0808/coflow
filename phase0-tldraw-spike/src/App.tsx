@@ -71,11 +71,25 @@ type SelectedMediaInfo = {
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
   const frameActionRafRef = useRef<number | null>(null)
+  const statusTimeoutRef = useRef<number | null>(null)
   const [status, setStatus] = useState('')
   const [frameAction, setFrameAction] = useState<FrameActionState>(null)
   const [selectedMediaInfo, setSelectedMediaInfo] = useState<SelectedMediaInfo>(null)
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>(null)
-  const assetStore = useMemo(() => createLocalAssetStore(setUploadProgress, setStatus), [])
+
+  function showStatus(message: string, durationMs = 3200) {
+    const appWindow = editorRef.current?.getContainer().ownerDocument.defaultView ?? window
+    if (statusTimeoutRef.current !== null) appWindow.clearTimeout(statusTimeoutRef.current)
+    setStatus(message)
+    if (durationMs > 0) {
+      statusTimeoutRef.current = appWindow.setTimeout(() => {
+        statusTimeoutRef.current = null
+        setStatus('')
+      }, durationMs)
+    }
+  }
+
+  const assetStore = useMemo(() => createLocalAssetStore(setUploadProgress, showStatus), [])
 
   useEffect(() => {
     let stopped = false
@@ -108,6 +122,7 @@ export default function App() {
     return () => {
       stopped = true
       window.clearInterval(interval)
+      if (statusTimeoutRef.current !== null) window.clearTimeout(statusTimeoutRef.current)
     }
   }, [])
 
@@ -134,12 +149,12 @@ export default function App() {
     try {
       const command = await queueAgentPrompt({
         frameId,
-        prompt: 'Generate a new version using the selected frame annotations.',
+        prompt: 'Use the selected frame as the edit source. Follow all canvas annotations exactly.',
         provider: 'atlas',
       })
-      setStatus(`Queued Codex skill command ${command.id}`)
+      showStatus(`Queued Codex skill command ${command.id}`)
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Failed to queue Codex skill command.')
+      showStatus(error instanceof Error ? error.message : 'Failed to queue Codex skill command.', 5200)
     }
   }
 
@@ -152,13 +167,13 @@ export default function App() {
     const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
     const frame = frameId ? shapes.find((shape) => shape.id === frameId && shape.type === 'frame') : findContextFrame(editor, shapes)
     if (!frame) {
-      setStatus('No frame found. Select a frame or use the seeded task frame.')
+      showStatus('No frame found. Select a frame or use the seeded task frame.', 5200)
       return
     }
 
     const context = await extractMaterializedFrameContext(editor, shapes, frame.id)
     if (!context.anchorMedia) {
-      setStatus('Frame has no media anchor.')
+      showStatus('Frame has no media anchor.', 5200)
       return
     }
 
@@ -323,12 +338,13 @@ export default function App() {
       skillName: 'codex-media-generation',
       promptSource: options.prompt ? 'codex-agent-bridge' : 'canvas-frame-action',
     })
-    setStatus(
+    showStatus(
       execution?.status === 'processing'
         ? `${generationRequest.provider} is still generating; kept a non-final preview`
         : execution?.status === 'failed'
           ? `${generationRequest.provider} generation failed; kept a failed-state preview`
-          : `Executed ${generationRequest.generationMode} request and updated child preview`
+          : `Executed ${generationRequest.generationMode} request and updated child preview`,
+      execution?.status === 'processing' ? 5200 : 3200
     )
   }
 

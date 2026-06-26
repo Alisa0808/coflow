@@ -110,12 +110,27 @@ function inflateBounds(bounds, padding) {
 function isInsideFrame(shape, frame, frameBounds) {
   if (shape.parentId === frame.id) return true
   const bounds = getShapeBounds(shape)
-  return (
+  if (
     bounds.x >= frameBounds.x &&
     bounds.y >= frameBounds.y &&
     bounds.x + bounds.w <= frameBounds.x + frameBounds.w &&
     bounds.y + bounds.h <= frameBounds.y + frameBounds.h
-  )
+  ) {
+    return true
+  }
+  const center = {
+    x: bounds.x + bounds.w / 2,
+    y: bounds.y + bounds.h / 2,
+  }
+  if (
+    center.x >= frameBounds.x &&
+    center.x <= frameBounds.x + frameBounds.w &&
+    center.y >= frameBounds.y &&
+    center.y <= frameBounds.y + frameBounds.h
+  ) {
+    return true
+  }
+  return overlapArea(bounds, frameBounds) / Math.max(1, bounds.w * bounds.h) >= 0.35
 }
 
 function isMediaShape(shape) {
@@ -159,4 +174,10 @@ function stringProp(value, fallback) {
 
 function optionalStringProp(value) {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function overlapArea(a, b) {
+  const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x))
+  const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y))
+  return x * y
 }

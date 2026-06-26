@@ -157,12 +157,33 @@ function toGenerationReference(media: MediaContext): GenerationReference {
 }
 
 function buildPrompt(context: FrameContext, promptOverride?: string) {
-  const annotationTexts = context.annotations
-    .map((annotation) => annotation.text)
-    .filter((text): text is string => Boolean(text))
+  const annotationTexts = context.annotations.map((annotation) => annotationToPromptLine(annotation, context.bounds)).filter(Boolean)
 
   if (promptOverride && annotationTexts.length > 0) return `${promptOverride}\n\nCanvas annotations:\n${annotationTexts.join('\n')}`
   if (promptOverride) return promptOverride
   if (annotationTexts.length > 0) return annotationTexts.join('\n')
   return `Create a new version from frame "${context.frameName}".`
+}
+
+function annotationToPromptLine(annotation: AnnotationContext, frameBounds: Bounds) {
+  const text = annotation.text?.trim()
+  if (text) return text
+
+  const bounds = annotation.bounds
+  const region = describeRelativeRegion(bounds, frameBounds)
+  if (annotation.type === 'geo') return `A drawn geometric annotation marks the ${region} target region.`
+  if (annotation.type === 'arrow') return `An arrow annotation points toward the ${region} target region.`
+  if (annotation.type === 'draw') return `A freehand drawing annotation marks the ${region} target region.`
+  return `${annotation.type} annotation at the ${region} target region.`
+}
+
+function describeRelativeRegion(bounds: Bounds, frameBounds: Bounds) {
+  const centerX = bounds.x + bounds.w / 2
+  const centerY = bounds.y + bounds.h / 2
+  const relX = frameBounds.w > 0 ? (centerX - frameBounds.x) / frameBounds.w : 0.5
+  const relY = frameBounds.h > 0 ? (centerY - frameBounds.y) / frameBounds.h : 0.5
+  const horizontal = relX < 0.33 ? 'left' : relX > 0.66 ? 'right' : 'center'
+  const vertical = relY < 0.33 ? 'upper' : relY > 0.66 ? 'lower' : 'middle'
+  if (horizontal === 'center' && vertical === 'middle') return 'center'
+  return `${vertical} ${horizontal}`
 }
