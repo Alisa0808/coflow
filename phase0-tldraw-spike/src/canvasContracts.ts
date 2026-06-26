@@ -3,6 +3,7 @@ export type Bounds = {
   y: number
   w: number
   h: number
+  rotation?: number
 }
 
 export type CanvasShapeKind = 'media-image' | 'image' | 'video' | 'frame' | 'geo' | 'note' | 'text' | 'draw' | 'arrow'
@@ -42,6 +43,39 @@ export type FrameContext = {
   anchorMedia?: MediaContext
   media: MediaContext[]
   annotations: AnnotationContext[]
+}
+
+export type CanvasItemKind = 'image' | 'video' | 'audio' | 'model3d' | 'text' | 'note' | 'arrow' | 'shape' | 'frame'
+
+export type CanvasAssetContext = {
+  assetId: string
+  mimeType: string
+  localPath?: string
+  absolutePath?: string
+  src?: string
+  width?: number
+  height?: number
+  durationMs?: number
+  fileSize?: number
+}
+
+export type CanvasItem = {
+  id: string
+  kind: CanvasItemKind
+  canvasType: CanvasShapeKind | string
+  bounds: Bounds
+  parentId?: string
+  text?: string
+  asset?: CanvasAssetContext
+  metadata?: Record<string, unknown>
+}
+
+export type CanvasSelectionSnapshot = {
+  version: 1
+  selectedIds: string[]
+  selectedItems: CanvasItem[]
+  activeFrame?: FrameContext
+  updatedAt: string
 }
 
 export type VersionPlacement = {

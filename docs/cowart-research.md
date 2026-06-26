@@ -25,6 +25,12 @@ The recommended product is therefore not a line-by-line Cowart fork. It should b
 
 > An agent-native infinite canvas that turns an idea into images, video, and 3D, with frame-level visual feedback and traceable versions. Powered by AtlasCloud, but open to other providers.
 
+The most important lesson from Cowart is architectural, not nominal:
+
+> Persist the user's real canvas selection and expose it to Codex; let Codex generate; then write the result back to the canvas.
+
+Do not copy Cowart's project-specific field names, metadata prefixes, UI labels, or storage identifiers. Our open-source implementation should use neutral names such as `canvas.get_selection`, `canvas.get_frame_context`, `canvas.insert_media`, `canvas.create_version`, and `canvas.link_versions`.
+
 ## Important legal boundary
 
 Cowart currently has no repository license. Public source is not the same as permission to copy, modify, or redistribute. Do not copy its code into this project unless the author adds a suitable license or grants permission.
@@ -34,7 +40,7 @@ The safe path is clean-room implementation from observed behavior and public int
 - reproduce the user workflow, not Cowart source code;
 - write new types, storage, MCP tools, skills, UI, and tests;
 - keep this research document as the functional reference;
-- avoid Cowart names, logos, screenshots, and source-derived identifiers in the released product.
+- avoid Cowart names, logos, screenshots, metadata prefixes, field names, and source-derived identifiers in the released product.
 
 tldraw has a separate licensing constraint. Its SDK permits development by default, but production use requires a trial, commercial, or hobby license key. An open repository can depend on tldraw, but downstream production users still need their own applicable tldraw license. This should be resolved before calling the final product fully open source.
 
@@ -118,6 +124,27 @@ Cowart exposes only two MCP tools:
 The apparent intelligence lives in skills. For annotation edits, the user must provide a screenshot. The skill tells Codex to visually interpret arrows and labels, generate a clean revised bitmap, preserve the original, and insert the new result to the right.
 
 This is a clever contract because it avoids building annotation parsing, model routing, or media generation into the app. It is also brittle because behavior depends on prose instructions and the capabilities of the current host agent.
+
+For our project, the equivalent contract should be:
+
+```text
+canvas.get_selection
+  returns selected shape ids, normalized bounds, kind, text, local asset metadata, and optional active frame
+
+canvas.get_frame_context
+  returns bounded media, annotations, text, geometry, and asset paths for a selected or explicit frame
+
+canvas.capture_frame / canvas.capture_selection
+  returns a local visual snapshot when Codex needs multimodal inspection
+
+canvas.insert_media
+  inserts a generated local asset without replacing the source
+
+canvas.create_version / canvas.link_versions
+  records and visualizes source-output lineage
+```
+
+This preserves the proven Cowart loop while keeping the product identity, data contracts, and open-source implementation independent.
 
 ### What is worth preserving
 

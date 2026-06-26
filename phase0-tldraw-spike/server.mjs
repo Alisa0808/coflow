@@ -19,6 +19,7 @@ const assetsRoot = join(storeRoot, 'assets')
 const executionsRoot = join(storeRoot, 'executions')
 const uploadsRoot = join(storeRoot, 'uploads')
 const latestFrameContextPath = join(metadataRoot, 'latest-frame-context.json')
+const latestSelectionPath = join(metadataRoot, 'latest-selection.json')
 const latestAgentPromptPath = join(metadataRoot, 'latest-agent-prompt.json')
 const latestCodexFrameRequestPath = join(metadataRoot, 'latest-codex-frame-request.json')
 const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
@@ -54,6 +55,22 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/api/frame-context' && request.method === 'GET') {
       return sendJson(response, await readJsonFile(latestFrameContextPath, null))
+    }
+
+    if (url.pathname === '/api/selection' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      const selection = normalizeSelectionSnapshot(body)
+      await writeJson(latestSelectionPath, {
+        updatedAt: new Date().toISOString(),
+        source: 'phase0-tldraw-spike',
+        selection,
+      })
+      await appendOperation({ type: 'selection.updated', selection })
+      return sendJson(response, { ok: true })
+    }
+
+    if (url.pathname === '/api/selection' && request.method === 'GET') {
+      return sendJson(response, await readJsonFile(latestSelectionPath, null))
     }
 
     if (url.pathname === '/api/operations' && request.method === 'POST') {
@@ -355,6 +372,21 @@ function createCommand(input) {
     model: input.model,
     status: input.status,
     skillName: input.skillName,
+  }
+}
+
+function normalizeSelectionSnapshot(input) {
+  const selectedIds = Array.isArray(input?.selectedIds) ? input.selectedIds.filter((id) => typeof id === 'string') : []
+  const selectedItems = Array.isArray(input?.selectedItems)
+    ? input.selectedItems.filter((item) => item && typeof item === 'object' && typeof item.id === 'string')
+    : []
+
+  return {
+    version: 1,
+    selectedIds,
+    selectedItems,
+    activeFrame: input?.activeFrame && typeof input.activeFrame === 'object' ? input.activeFrame : undefined,
+    updatedAt: typeof input?.updatedAt === 'string' ? input.updatedAt : new Date().toISOString(),
   }
 }
 

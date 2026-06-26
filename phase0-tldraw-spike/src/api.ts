@@ -1,9 +1,9 @@
-import type { FrameContext } from './canvasContracts'
+import type { CanvasSelectionSnapshot, FrameContext } from './canvasContracts'
 import type { ProviderReadyGenerationRequest } from './generationContract'
 
 export type CanvasCommand = {
   id: string
-  type: 'canvas.create_version' | 'canvas.agent_prompt'
+  type: 'canvas.create_version' | 'canvas.agent_prompt' | 'canvas.insert_media'
   frameId?: string
   prompt?: string
   provider?: 'mock-provider' | 'atlas' | 'seedance' | 'kling'
@@ -86,6 +86,14 @@ export async function publishFrameContext(context: FrameContext) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(context),
+  })
+}
+
+export async function publishSelectionSnapshot(selection: CanvasSelectionSnapshot) {
+  await fetch('/api/selection', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(selection),
   })
 }
 

@@ -30,6 +30,19 @@ But it is not a strong foundation for the full product experience, because it ma
 
 Recommendation: migrate toward the official tldraw agent starter architecture, while keeping our media-generation-specific backend and provider payload work as custom prompt parts/actions.
 
+Important product boundary:
+
+The canvas must not become the primary media generator or provider form. The primary architecture is a Codex-driven canvas bridge:
+
+```text
+canvas selection / frame / asset / annotation context
+→ Codex agent skill
+→ provider / model execution
+→ canvas writeback with media version lineage
+```
+
+This means the migration should prioritize structured context export and Codex-readable MCP/API tools over browser-side provider execution. Frame buttons may remain as shortcuts, but they should create or expose a Codex-readable request rather than owning the provider call.
+
 ## Official starter capabilities
 
 Source: <https://tldraw.dev/use-cases/ai-enabled-canvas>
@@ -254,6 +267,58 @@ The starter kit already has the lifecycle shape for this.
 | result placement / lineage arrows | keep and improve | `GenerateMediaActionUtil.applyAction` |
 | tldraw native toolbar/context/style | keep native | official starter also avoids rebuilding core chrome |
 | current polling command bridge | replace | agent request/stream endpoint |
+
+## Clean-room schema boundary
+
+Cowart validates the right interaction pattern, but this project must not copy Cowart's internal metadata field names or project-specific identifiers. We should define our own neutral, open-source schema for canvas-agent state.
+
+Recommended tool names:
+
+```text
+canvas.get_selection
+canvas.get_frame_context
+canvas.get_asset
+canvas.capture_selection
+canvas.capture_frame
+canvas.insert_media
+canvas.create_version
+canvas.link_versions
+```
+
+Recommended context shape:
+
+```ts
+type CanvasSelectionSnapshot = {
+  version: 1
+  selectedIds: string[]
+  selectedItems: CanvasItem[]
+  activeFrame?: CanvasFrameContext
+  updatedAt: string
+}
+
+type CanvasItem = {
+  id: string
+  kind: 'image' | 'video' | 'audio' | 'model3d' | 'text' | 'note' | 'arrow' | 'shape' | 'frame'
+  bounds: { x: number; y: number; w: number; h: number; rotation?: number }
+  parentId?: string
+  text?: string
+  asset?: {
+    assetId: string
+    mimeType: string
+    localPath: string
+    absolutePath: string
+    width?: number
+    height?: number
+    durationMs?: number
+    fileSize?: number
+  }
+  metadata?: Record<string, unknown>
+}
+```
+
+The acceptance test for this migration is not "the browser can call Atlas." It is:
+
+> Codex can reliably read exactly what the user selected or framed, understand source assets and annotations, choose the right skill/provider, and write the generated media back as a traceable version.
 
 ## Migration architecture
 

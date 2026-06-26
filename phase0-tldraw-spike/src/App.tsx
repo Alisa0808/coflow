@@ -18,11 +18,23 @@ import {
   getShapeBounds,
   richTextToPlainText,
   type Bounds,
+  type CanvasAssetContext,
+  type CanvasItem,
+  type CanvasItemKind,
+  type CanvasSelectionSnapshot,
   type CanvasShapeRecord,
   type FrameContext,
 } from './canvasContracts'
 import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil, type MediaImageShape } from './mediaShape'
-import { fetchPendingCommands, materializeAsset, publishCodexFrameRequest, publishFrameContext, recordOperation, type CanvasCommand } from './api'
+import {
+  fetchPendingCommands,
+  materializeAsset,
+  publishCodexFrameRequest,
+  publishFrameContext,
+  publishSelectionSnapshot,
+  recordOperation,
+  type CanvasCommand,
+} from './api'
 
 const shapeUtils = [MediaImageShapeUtil]
 const MAX_ASSET_SIZE_BYTES = 2 * 1024 * 1024 * 1024
@@ -62,6 +74,8 @@ export default function App() {
   const editorRef = useRef<Editor | null>(null)
   const frameActionRafRef = useRef<number | null>(null)
   const statusTimeoutRef = useRef<number | null>(null)
+  const selectionPublishTimeoutRef = useRef<number | null>(null)
+  const lastPublishedSelectionRef = useRef('')
   const [status, setStatus] = useState('')
   const [frameAction, setFrameAction] = useState<FrameActionState>(null)
   const [selectedMediaInfo, setSelectedMediaInfo] = useState<SelectedMediaInfo>(null)
@@ -108,6 +122,7 @@ export default function App() {
       stopped = true
       window.clearInterval(interval)
       if (statusTimeoutRef.current !== null) window.clearTimeout(statusTimeoutRef.current)
+      if (selectionPublishTimeoutRef.current !== null) window.clearTimeout(selectionPublishTimeoutRef.current)
     }
   }, [])
 
@@ -124,10 +139,40 @@ export default function App() {
         setFrameAction(getSelectedFrameAction(editor))
         setSelectedMediaInfo(getSelectedMediaInfo(editor))
       })
+      scheduleSelectionPublish(editor)
       normalizeImportedMediaShapes(editor, Object.values(changes.added))
     })
     editor.disposables.add(unsubscribe)
+    void publishCurrentSelection(editor)
     setStatus('')
+  }
+
+  function scheduleSelectionPublish(editor: Editor) {
+    const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
+    if (selectionPublishTimeoutRef.current !== null) appWindow.clearTimeout(selectionPublishTimeoutRef.current)
+    selectionPublishTimeoutRef.current = appWindow.setTimeout(() => {
+      selectionPublishTimeoutRef.current = null
+      void publishCurrentSelection(editor)
+    }, 250)
+  }
+
+  async function publishCurrentSelection(editor: Editor) {
+    try {
+      const selection = await buildSelectionSnapshot(editor)
+      const serialized = JSON.stringify({
+        selectedIds: selection.selectedIds,
+        selectedItems: selection.selectedItems,
+        activeFrameId: selection.activeFrame?.frameId,
+      })
+      if (serialized === lastPublishedSelectionRef.current) return
+      lastPublishedSelectionRef.current = serialized
+      await publishSelectionSnapshot(selection)
+    } catch (error) {
+      await recordOperation({
+        type: 'selection.publish_failed',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   async function sendFrameToCodex(frameId: string) {
@@ -690,6 +735,162 @@ function toCanvasShapeRecords(shapes: TLShape[]): CanvasShapeRecord[] {
     parentId: shape.parentId,
     props: normalizeProps(shape),
   }))
+}
+
+async function buildSelectionSnapshot(editor: Editor): Promise<CanvasSelectionSnapshot> {
+  const selectedShapes = editor.getSelectedShapes()
+  const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
+  const activeFrameRecord = findActiveFrameForSelection(editor, shapes)
+  const activeFrame = activeFrameRecord ? await extractMaterializedFrameContext(editor, shapes, activeFrameRecord.id) : undefined
+
+  return {
+    version: 1,
+    selectedIds: selectedShapes.map((shape) => shape.id),
+    selectedItems: await Promise.all(selectedShapes.map((shape) => toCanvasItem(editor, shape))),
+    activeFrame,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+async function toCanvasItem(editor: Editor, shape: TLShape): Promise<CanvasItem> {
+  const props = normalizeProps(shape)
+  const bounds = getNativeShapeBounds(shape)
+  const asset = await getCanvasAssetContext(editor, shape, props)
+  const text = getShapePlainText(props)
+  const metadata = pickMetadata(props, [
+    'versionId',
+    'prompt',
+    'provider',
+    'model',
+    'generationMode',
+    'status',
+    'skillName',
+    'requestId',
+    'executionId',
+    'title',
+  ])
+
+  return {
+    id: shape.id,
+    kind: toCanvasItemKind(shape.type),
+    canvasType: shape.type,
+    parentId: shape.parentId,
+    bounds: {
+      ...bounds,
+      rotation: typeof shape.rotation === 'number' && Number.isFinite(shape.rotation) ? shape.rotation : undefined,
+    },
+    text,
+    asset,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+  }
+}
+
+async function getCanvasAssetContext(editor: Editor, shape: TLShape, props: Record<string, unknown>): Promise<CanvasAssetContext | undefined> {
+  if (shape.type !== MEDIA_IMAGE_SHAPE && shape.type !== 'image' && shape.type !== 'video') return undefined
+
+  const assetId = stringFromUnknown(props.assetId) ?? shape.id
+  const asset = editor.getAsset(assetId as TLAsset['id']) as TLAsset | undefined
+  const assetProps = (asset?.props ?? {}) as Record<string, unknown>
+  const assetMeta = (asset?.meta ?? {}) as Record<string, unknown>
+  const src = stringFromUnknown(props.src) ?? stringFromUnknown(assetProps.src) ?? stringFromUnknown(assetMeta.src)
+  const mimeType =
+    stringFromUnknown(props.mimeType) ??
+    stringFromUnknown(assetProps.mimeType) ??
+    stringFromUnknown(assetMeta.mimeType) ??
+    (shape.type === 'video' ? 'video/mp4' : 'image/*')
+  let localPath = stringFromUnknown(props.localPath) ?? stringFromUnknown(assetMeta.localPath)
+  let absolutePath = stringFromUnknown(props.absolutePath) ?? stringFromUnknown(assetMeta.absolutePath)
+
+  if (!localPath && src?.startsWith('/asset-store/')) {
+    localPath = `.codex-media-canvas/${src.slice('/asset-store/'.length)}`
+  }
+
+  if ((!localPath || !absolutePath) && src?.startsWith('data:')) {
+    const materialized = await materializeAsset({
+      shapeId: shape.id,
+      assetId,
+      name: stringFromUnknown(assetProps.name) ?? stringFromUnknown(props.title) ?? shape.id,
+      mimeType: stringFromUnknown(assetProps.mimeType) ?? stringFromUnknown(assetMeta.mimeType) ?? undefined,
+      src,
+    })
+    localPath = materialized.localPath
+    absolutePath = materialized.absolutePath
+  }
+
+  const bounds = getNativeShapeBounds(shape)
+  return {
+    assetId,
+    mimeType,
+    localPath,
+    absolutePath,
+    src,
+    width: numberFromUnknown(assetProps.w) ?? numberFromUnknown(props.w) ?? bounds.w,
+    height: numberFromUnknown(assetProps.h) ?? numberFromUnknown(props.h) ?? bounds.h,
+    durationMs: numberFromUnknown(assetProps.durationMs) ?? numberFromUnknown(assetMeta.durationMs),
+    fileSize: numberFromUnknown(assetProps.fileSize) ?? numberFromUnknown(assetMeta.fileSize) ?? numberFromUnknown(assetMeta.bytes),
+  }
+}
+
+function toCanvasItemKind(type: string): CanvasItemKind {
+  if (type === MEDIA_IMAGE_SHAPE || type === 'image') return 'image'
+  if (type === 'video') return 'video'
+  if (type === 'frame') return 'frame'
+  if (type === 'note') return 'note'
+  if (type === 'text') return 'text'
+  if (type === 'arrow') return 'arrow'
+  return 'shape'
+}
+
+function getShapePlainText(props: Record<string, unknown>) {
+  return (
+    stringFromUnknown(props.text) ??
+    stringFromUnknown(props.plainText) ??
+    stringFromUnknown(props.name) ??
+    richTextToPlainText(props.richText)
+  )
+}
+
+function pickMetadata(props: Record<string, unknown>, keys: string[]) {
+  const metadata: Record<string, unknown> = {}
+  for (const key of keys) {
+    const value = props[key]
+    if (value !== undefined && value !== null && value !== '') metadata[key] = value
+  }
+  return metadata
+}
+
+function numberFromUnknown(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function findActiveFrameForSelection(editor: Editor, shapes: CanvasShapeRecord[]) {
+  const selected = editor.getSelectedShapes()
+  if (selected.length === 0) return undefined
+
+  const selectedFrame = selected.find((shape) => shape.type === 'frame')
+  if (selectedFrame) return shapes.find((shape) => shape.id === selectedFrame.id && shape.type === 'frame')
+
+  const selectedIds = new Set<string>(selected.map((shape) => String(shape.id)))
+  const parentFrame = shapes.find(
+    (shape) => shape.type === 'frame' && shapes.some((candidate) => selectedIds.has(candidate.id) && candidate.parentId === shape.id),
+  )
+  if (parentFrame) return parentFrame
+
+  const frames = shapes.filter((shape) => shape.type === 'frame')
+  const selectedRecords = shapes.filter((shape) => selectedIds.has(shape.id))
+  return frames.find((frame) => selectedRecords.some((shape) => shapeCenterIsInsideFrame(shape, frame)))
+}
+
+function shapeCenterIsInsideFrame(shape: CanvasShapeRecord, frame: CanvasShapeRecord) {
+  const bounds = getShapeBounds(shape)
+  const frameBounds = getShapeBounds(frame)
+  const center = { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 }
+  return (
+    center.x >= frameBounds.x &&
+    center.x <= frameBounds.x + frameBounds.w &&
+    center.y >= frameBounds.y &&
+    center.y <= frameBounds.y + frameBounds.h
+  )
 }
 
 async function extractMaterializedFrameContext(editor: Editor, shapes: CanvasShapeRecord[], frameId: string): Promise<FrameContext> {

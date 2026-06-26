@@ -64,6 +64,86 @@ Cowart 证明了一个重要事实：
 
 > 一个 AI 画布 MVP 不一定需要先做复杂模型平台；只要把“选区上下文”和“回填结果”打通，Codex 本身就能驱动很多创作流程。
 
+这里有一个需要永久写进项目边界的原则：
+
+> 画布不是生成器，画布是 Codex 的视觉上下文容器。
+
+也就是说，画布的首要职责不是在前端里直接拼 provider payload、调用 Atlas / OpenAI / Seedance / Kling API，然后自己判断结果如何写回；而是把当前画布的真实状态用结构化接口交给 Codex：
+
+- 当前 selection：用户真实选中了哪个 frame、图片、视频、3D 视图、便利贴或标注；
+- 对象 identity：shape id、asset id、版本 id、父子关系和 frame 归属；
+- 空间信息：x / y / w / h / rotation / z-order / bounds / containment；
+- 类型信息：image、video、audio、model3d、text、note、arrow、geo、frame、generated slot；
+- 内容信息：文本、便利贴内容、frame title、箭头/标注关系；
+- 素材信息：本地路径、absolute path、mime type、文件大小、原始分辨率、时长、视频帧信息；
+- 任务边界：用户选中的 frame、框选区域、多选对象或当前 active request；
+- 可选视觉快照：selection / frame 的截图或 render，用于让多模态模型判断复杂视觉关系。
+
+Codex 读取这些上下文后，再决定应该调用哪个 agent skill、选择哪个 provider / model、构造什么生成请求、如何保存输出，以及把结果插回画布哪里。
+
+这意味着 Cowart 值得借鉴的是 **selection persistence + MCP read/write bridge** 这个交互范式，而不是它的字段名、metadata 命名或具体实现。由于我们也要开源，必须采用 clean-room schema，避免复制 `cowart...` 这类项目特定字段名。
+
+我们的中性命名应围绕：
+
+```text
+canvas.get_selection
+canvas.get_frame_context
+canvas.get_asset
+canvas.capture_selection
+canvas.capture_frame
+canvas.insert_media
+canvas.create_version
+canvas.link_versions
+```
+
+对应的数据结构应该使用我们自己的开源中性 schema，例如：
+
+```ts
+type CanvasSelectionSnapshot = {
+  version: 1
+  selectedIds: string[]
+  selectedItems: CanvasItem[]
+  activeFrame?: CanvasFrameContext
+  updatedAt: string
+}
+
+type CanvasItem = {
+  id: string
+  kind:
+    | 'image'
+    | 'video'
+    | 'audio'
+    | 'model3d'
+    | 'text'
+    | 'note'
+    | 'arrow'
+    | 'shape'
+    | 'frame'
+  bounds: {
+    x: number
+    y: number
+    w: number
+    h: number
+    rotation?: number
+  }
+  parentId?: string
+  text?: string
+  asset?: {
+    assetId: string
+    mimeType: string
+    localPath: string
+    absolutePath: string
+    width?: number
+    height?: number
+    durationMs?: number
+    fileSize?: number
+  }
+  metadata?: Record<string, unknown>
+}
+```
+
+后续实现中，如果某个按钮需要存在，它也只是把当前 selection / frame 变成 Codex 可读取的 request 或 trigger；它不应该成为 provider API 的主要入口。
+
 但 Cowart 也暴露了明显边界：
 
 - 没有 provider 抽象；
@@ -75,7 +155,7 @@ Cowart 证明了一个重要事实：
 - 没有原生视频帧、镜头重生成、3D 视图迭代能力；
 - 代码仓库当时没有明确 license，不能直接复制实现。
 
-所以我们的正确路径不是 fork Cowart，而是 clean-room 复现它验证过的交互范式，并把底层抽象升级成可长期扩展的媒体创作系统。
+所以我们的正确路径不是 fork Cowart，也不是照搬 Cowart 的内部字段，而是 clean-room 复现它验证过的“Codex 读取画布上下文并写回结果”的交互范式，并把底层抽象升级成可长期扩展的媒体创作系统。
 
 ### 1.3 AI-Canvas 的快速跟进与竞争态势
 
@@ -189,6 +269,41 @@ Provider = image / video / 3D / LLM generation
 - 画布只负责把当前 frame / selection / annotation context 暴露给 Codex，并把结果回填。
 
 这能避免项目变成“白板里的表单应用”，也能让 Skill 真正利用 Codex 的上下文、工具调用和推理能力。
+
+### 2.4 Codex-driven canvas bridge 是主路径
+
+为了避免后续实现跑偏，项目主路径必须定义为 **Codex-driven canvas bridge**：
+
+```text
+Canvas exports context
+→ Codex reads selection / frame / assets / annotations
+→ Codex chooses skill and provider
+→ Codex generates or edits media
+→ Canvas receives inserted media and visible lineage
+```
+
+这和“browser-side provider executor”是两种不同产品逻辑：
+
+| 方向 | 是否主路径 | 原因 |
+| --- | --- | --- |
+| 画布导出 selection / frame context，Codex 通过 MCP 读取 | 是 | 符合 agent-native canvas，能利用 Codex 的推理、工具调用和 Skill |
+| Codex 生成后通过 MCP/API 插回画布 | 是 | 回板、版本血缘、文件保存都可追踪 |
+| 白板按钮触发当前 frame 进入 Codex request | 可以作为快捷入口 | 只是 trigger，不是 provider 表单 |
+| 前端直接调用 Atlas / Seedance / Kling 生成 | 不是主路径 | 容易丢失 Codex 编排能力，也容易造成源素材、标注、输出链路混乱 |
+| 在白板里堆 provider / scene / skill 面板 | 不是主路径 | 会退化成表单式制图工具 |
+
+因此，后续 Phase 0 / Phase 1 的实现应优先闭合这些能力：
+
+1. `canvas.get_selection`：Codex 能读取当前选中的对象和素材 metadata；
+2. `canvas.get_frame_context`：Codex 能读取指定 frame 内的媒体、文本、标注、空间关系；
+3. `canvas.capture_frame` / `canvas.capture_selection`：需要视觉判断时，Codex 能拿到局部截图；
+4. `canvas.insert_media`：Codex 能把生成结果作为新素材插回画布；
+5. `canvas.create_version` / `canvas.link_versions`：生成结果和源素材之间有可见连线与可查询 metadata；
+6. skill orchestration：图像、视频、3D 等场景能力以 Codex agent skill 存在，而不是白板业务按钮。
+
+验收标准不是“画布里能调用某个 API”，而是：
+
+> Codex 能准确知道用户选中了什么、frame 里有哪些上下文、源素材在哪里、标注是什么、输出应当写回哪里，并能把生成结果作为可追踪版本放回画布。
 
 ## 3. 产品定位
 
