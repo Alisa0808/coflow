@@ -49,7 +49,9 @@ User clicks Send to Codex on a frame
 → writes latest frame context
 → writes a durable Frame Input JSON artifact
 → writes latest Codex frame request with status: awaiting_user_instruction and frameInput.absolutePath
-→ Codex reads canvas.get_frame_request / canvas.get_selection
+→ host integration attaches/pastes a frame screenshot into the Codex composer when available
+→ Codex reads canvas.get_frame_request / canvas.get_selection / Frame Input
+→ Codex uses the screenshot only as auxiliary visual evidence
 → Codex summarizes the task in conversation
 → user confirms or adds instructions
 → Codex executes the relevant skill/provider
@@ -72,10 +74,13 @@ Frame button
 → canvas.insert_media / canvas.create_version
 ```
 
-The Frame Input JSON is the current implementation of the “attachment-like”
-handoff. It is intentionally a real file so Codex can inspect and cite the exact
-bounded input. If the Codex desktop host later exposes a composer attachment API,
-`Send to Codex` should attach this same file to the user’s message composer.
+The user-facing handoff should feel like a screenshot was sent to Codex. The
+Frame Input JSON is the hidden source of truth for the agent: it is intentionally
+a real file so Codex can inspect the exact bounded input, but it should not be
+shown in canvas toast copy. If the Codex desktop host exposes a composer
+attachment API, `Send to Codex` should paste/attach a frame screenshot to the
+composer for user confidence, while Codex still uses the Frame Input JSON as the
+primary execution input.
 
 ## 4. Current file map
 

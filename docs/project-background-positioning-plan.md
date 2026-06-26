@@ -310,7 +310,8 @@ Canvas exports context
 ```text
 User clicks Send to Codex on a frame
 → canvas publishes frame context and a pending Codex frame request
-→ canvas saves a Frame Input JSON file for Codex to inspect
+→ canvas saves a hidden Frame Input JSON file for Codex to inspect
+→ Codex host attaches/pastes a frame screenshot to the conversation when available
 → Codex reads and summarizes the task context
 → user confirms or adds instructions in the Codex conversation
 → Codex chooses skill/provider/model and executes
@@ -323,7 +324,9 @@ Frame Input 文件是 `Send to Codex` 的附件化边界：
 
 - 当前实现先生成 `.codex-media-canvas/frame-inputs/frame-request-*.json`；
 - 最新 request 中必须包含 `frameInput.absolutePath`，让 Codex 可以像读取消息附件一样读取这份上下文；
-- 如果 Codex 宿主后续开放 composer attachment API，则 `Send to Codex` 应把同一份 Frame Input JSON 自动挂到 Codex 输入框，而不是发散出另一套上下文格式；
+- 这份 JSON 是 agent 暗线，不应该在用户侧 toast / 白板 UI 里展示文件名；
+- 用户感知层应是 frame 截图：如果 Codex 宿主开放 composer attachment API，则 `Send to Codex` 应自动截图当前 frame 并粘贴 / attach 到 Codex 输入框；
+- Codex 执行时以 Frame Input JSON 为主输入，截图只用于辅助视觉判断，避免模型只看截图而丢掉对象 id、素材路径、标注结构和写回位置；
 - Frame Input 必须保留源素材路径、frame id、对象/标注、推荐用户提示与默认处理指令，作为后续 skill/provider 调用的唯一可信入口。
 
 首次进入画布的 example 策略也先记为待办：
