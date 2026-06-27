@@ -26,6 +26,29 @@ const tools = [
     },
   },
   {
+    name: 'canvas.capture_selection',
+    description:
+      'Return the latest real canvas selection as a Codex-consumable capture. If the selection is inside a frame, optionally include the latest Frame Input and frame screenshot artifacts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        includeFrameInput: {
+          type: 'boolean',
+          description: 'When true, include the latest Frame Input JSON content when it matches the active frame. Defaults to true.',
+        },
+        includeScreenshot: {
+          type: 'boolean',
+          description: 'When true, include latest frame screenshot metadata when it matches the active frame. Defaults to true.',
+        },
+        includeBase64: {
+          type: 'boolean',
+          description: 'When true, include screenshot base64 PNG bytes. Defaults to false.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'canvas.get_frame_context',
     description: 'Read the latest bounded frame context published by the canvas browser.',
     inputSchema: {
@@ -209,6 +232,35 @@ const tools = [
     },
   },
   {
+    name: 'canvas.link_versions',
+    description:
+      'Create a visible lineage/reference arrow between two existing canvas shapes. This is a writeback-only command; it does not call a provider.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourceShapeId: {
+          type: 'string',
+          description: 'Source shape id, usually the original media, frame, or prior version.',
+        },
+        targetShapeId: {
+          type: 'string',
+          description: 'Target shape id, usually the generated version or derivative media.',
+        },
+        frameId: {
+          type: 'string',
+          description: 'Optional related frame id for provenance.',
+        },
+        linkType: {
+          type: 'string',
+          enum: ['version', 'reference', 'derivative'],
+          description: 'Relationship type. Defaults to version.',
+        },
+      },
+      required: ['sourceShapeId', 'targetShapeId'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'canvas.agent_prompt',
     description:
       'Queue a Codex-style agent prompt for the canvas. This keeps Codex as the conversation layer while the browser executes the bounded canvas writeback.',
@@ -288,6 +340,18 @@ async function handleLine(line) {
       })
     }
 
+    if (toolName === 'canvas.capture_selection') {
+      const payload = await captureLatestSelection(params?.arguments ?? {})
+      return respond(id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload, null, 2),
+          },
+        ],
+      })
+    }
+
     if (toolName === 'canvas.get_frame_context') {
       const payload = await readLatestFrameContext()
       return respond(id, {
@@ -348,7 +412,7 @@ async function handleLine(line) {
       })
     }
 
-    if (toolName === 'canvas.create_version' || toolName === 'canvas.agent_prompt' || toolName === 'canvas.insert_media') {
+    if (toolName === 'canvas.create_version' || toolName === 'canvas.agent_prompt' || toolName === 'canvas.insert_media' || toolName === 'canvas.link_versions') {
       const payload = await enqueueCanvasCommand(params?.arguments ?? {}, toolName)
       return respond(id, {
         content: [
@@ -382,6 +446,54 @@ async function readLatestSelection() {
       warning: 'No selection has been published yet. Open the canvas and select a shape or frame.',
     }
   }
+}
+
+async function captureLatestSelection(args) {
+  const includeFrameInput = args.includeFrameInput !== false
+  const includeScreenshot = args.includeScreenshot !== false
+  const includeBase64 = Boolean(args.includeBase64)
+  const latestSelection = await readLatestSelection()
+  const activeFrameId = latestSelection.selection?.activeFrame?.frameId
+  const capture = {
+    ok: true,
+    updatedAt: new Date().toISOString(),
+    source: 'phase0-tldraw-spike',
+    captureType: 'selection',
+    selection: latestSelection.selection,
+  }
+
+  if (!latestSelection.selection?.selectedIds?.length) {
+    capture.warning = 'No selected canvas objects were published. Select a shape or frame in the canvas first.'
+    return capture
+  }
+
+  if (includeFrameInput) {
+    const frameInput = await readLatestFrameInput()
+    const frameInputFrameId = frameInput.content?.context?.frameId ?? frameInput.content?.frameId
+    capture.frameInput =
+      activeFrameId && frameInputFrameId && frameInputFrameId !== activeFrameId
+        ? {
+            stale: true,
+            warning: `Latest Frame Input belongs to ${frameInputFrameId}, but active selection frame is ${activeFrameId}. Click Send to Codex on the active frame to refresh it.`,
+            frameInput: frameInput.frameInput ?? null,
+          }
+        : frameInput
+  }
+
+  if (includeScreenshot) {
+    const screenshot = await readLatestFrameScreenshot(includeBase64)
+    const screenshotFrameId = screenshot.screenshot?.frameId
+    capture.frameScreenshot =
+      activeFrameId && screenshotFrameId && screenshotFrameId !== activeFrameId
+        ? {
+            stale: true,
+            warning: `Latest frame screenshot belongs to ${screenshotFrameId}, but active selection frame is ${activeFrameId}. Click Send to Codex on the active frame to refresh it.`,
+            screenshot: screenshot.screenshot ?? null,
+          }
+        : screenshot
+  }
+
+  return capture
 }
 
 async function readLatestFrameContext() {
@@ -512,6 +624,9 @@ async function enqueueCanvasCommand(args, toolName) {
     type: queuedType,
     requestedTool: toolName,
     frameId,
+    sourceShapeId: args.sourceShapeId,
+    targetShapeId: args.targetShapeId,
+    linkType: args.linkType,
     prompt: args.prompt,
     provider: args.provider,
     outputMediaType: args.outputMediaType,
@@ -524,7 +639,7 @@ async function enqueueCanvasCommand(args, toolName) {
     model: args.model,
     status: args.status || (toolName === 'canvas.create_version' ? 'succeeded' : undefined),
     skillName: args.skillName || (toolName === 'canvas.create_version' ? 'codex-media-generation' : undefined),
-    minClientVersion: queuedType === 'canvas.create_version' ? CANVAS_CLIENT_VERSION : undefined,
+    minClientVersion: queuedType === 'canvas.create_version' || queuedType === 'canvas.link_versions' ? CANVAS_CLIENT_VERSION : undefined,
   }
 
   await mkdir(commandsRoot, { recursive: true })

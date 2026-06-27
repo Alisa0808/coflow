@@ -39,9 +39,11 @@ The canvas is a **visual context container and writeback surface**. Codex is the
   - `canvas.get_frame_input`
   - `canvas.get_frame_screenshot`
   - `canvas.capture_frame`
+  - `canvas.capture_selection`
   - `canvas.get_asset`
   - `canvas.insert_media`
   - `canvas.create_version`
+  - `canvas.link_versions`
   - `canvas.agent_prompt`
 - Canvas writeback command polling for generated media placement.
 - Visible lineage arrow from source frame/context to generated result.
@@ -142,8 +144,8 @@ Acceptance for Phase 0.5:
 
 ## 5. What remains mock or incomplete
 
-- `canvas.capture_selection` is still not a first-class browser-generated artifact.
-- `canvas.link_versions` is not yet a separate MCP tool; lineage is currently created as part of `canvas.create_version`.
+- `canvas.capture_selection` is currently a first-class structured MCP capture. It returns the latest published selection and can include the latest matching Frame Input / frame screenshot artifacts. It does not yet ask the browser to create a fresh arbitrary selected-region PNG on demand.
+- `canvas.link_versions` exists as a separate MCP writeback tool and queues a visible, unbound lineage arrow between two existing shapes.
 - Direct provider executor code still exists for debugging/spike history and should be isolated further.
 - Active skill session mode is specified but not implemented.
 - Real image/video/3D skills are not packaged yet.
@@ -165,7 +167,7 @@ Acceptance for Phase 0.5:
    - `canvas.get_frame_screenshot`;
    - `canvas.capture_frame`;
    - `canvas.get_asset`;
-   - later: `canvas.capture_selection`, `canvas.link_versions`.
+   - later: browser-generated fresh selected-region PNG capture for `canvas.capture_selection`.
 
 3. Clean product docs:
    - canvas is context bridge;

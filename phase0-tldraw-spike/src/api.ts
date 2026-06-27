@@ -3,8 +3,11 @@ import type { ProviderReadyGenerationRequest } from './generationContract'
 
 export type CanvasCommand = {
   id: string
-  type: 'canvas.create_version' | 'canvas.agent_prompt' | 'canvas.insert_media'
+  type: 'canvas.create_version' | 'canvas.agent_prompt' | 'canvas.insert_media' | 'canvas.link_versions'
   frameId?: string
+  sourceShapeId?: string
+  targetShapeId?: string
+  linkType?: 'version' | 'reference' | 'derivative'
   prompt?: string
   provider?: 'mock-provider' | 'atlas' | 'seedance' | 'kling'
   outputMediaType?: 'image' | 'video'

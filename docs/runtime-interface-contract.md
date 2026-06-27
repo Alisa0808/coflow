@@ -119,17 +119,18 @@ canvas.get_frame_request
 canvas.get_frame_input
 canvas.get_frame_screenshot
 canvas.capture_frame
+canvas.capture_selection
 canvas.get_asset
 canvas.insert_media
 canvas.create_version
+canvas.link_versions
 canvas.agent_prompt
 ```
 
 Planned before Phase 1:
 
 ```text
-canvas.capture_selection
-canvas.link_versions
+browser-generated fresh selected-region PNG capture
 ```
 
 ## Upload flow
@@ -253,4 +254,4 @@ Security rules:
 - `metadata/latest-*.json` names can make people think they are authoritative history. They are only snapshots; history is in `executions/` and `operations.jsonl`.
 - Video output currently uses SVG preview fallback even when the final provider output is a video. Phase 1 should add first-frame thumbnail extraction.
 - `/api/executions/run-latest` and direct generation-request execution should be marked debug-only or moved behind active skill execution.
-- `canvas.capture_selection` and `canvas.link_versions` are still missing as first-class MCP tools.
+- `canvas.capture_selection` and `canvas.link_versions` now exist as first-class MCP tools. `capture_selection` returns structured selection plus optional latest matching frame artifacts; fresh browser-rendered selected-region PNG capture is still a Phase 1 cleanup target.

@@ -272,6 +272,12 @@ export default function App() {
             await placeVersionFromCommand(command)
           }
         }
+        const linkCommands = await fetchPendingCommands('canvas.link_versions', CANVAS_CLIENT_VERSION)
+        for (const command of linkCommands) {
+          if (command.type === 'canvas.link_versions') {
+            await placeVersionLinkFromCommand(command)
+          }
+        }
       } catch {
         // The local backend may still be starting; keep the canvas usable.
       }
@@ -638,6 +644,72 @@ export default function App() {
     showStatus('Placed Codex generated version on canvas.', 3200)
   }
 
+  async function placeVersionLinkFromCommand(command: CanvasCommand) {
+    const editor = editorRef.current
+    if (!editor) return
+    if (!command.sourceShapeId || !command.targetShapeId) {
+      showStatus('Codex link skipped: sourceShapeId and targetShapeId are required.', 5200)
+      return
+    }
+
+    const source = editor.getShape(command.sourceShapeId as TLShapeId)
+    const target = editor.getShape(command.targetShapeId as TLShapeId)
+    if (!source || !target) {
+      showStatus('Codex link skipped: source or target shape not found.', 5200)
+      return
+    }
+
+    const sourceBounds = getNativeShapeBounds(source)
+    const targetBounds = getNativeShapeBounds(target)
+    const sourceCenter = getBoundsCenter(sourceBounds)
+    const targetCenter = getBoundsCenter(targetBounds)
+    const sourceIsLeft = sourceCenter.x <= targetCenter.x
+    const arrowStart = {
+      x: sourceIsLeft ? sourceBounds.x + sourceBounds.w + 16 : sourceBounds.x - 16,
+      y: sourceCenter.y,
+    }
+    const arrowEnd = {
+      x: sourceIsLeft ? targetBounds.x - 16 : targetBounds.x + targetBounds.w + 16,
+      y: targetCenter.y,
+    }
+    const arrowId = createShapeId()
+
+    editor.run(() => {
+      editor.createShapes([
+        {
+          id: arrowId,
+          type: 'arrow',
+          x: arrowStart.x,
+          y: arrowStart.y,
+          props: {
+            kind: 'arc',
+            start: { x: 0, y: 0 },
+            end: { x: arrowEnd.x - arrowStart.x, y: arrowEnd.y - arrowStart.y },
+            bend: DEFAULT_ARROW_BEND,
+            dash: 'draw',
+            size: 'm',
+            fill: 'none',
+            color: 'blue',
+            arrowheadStart: 'none',
+            arrowheadEnd: 'arrow',
+            richText: toRichText(''),
+            labelPosition: 0.5,
+          },
+        },
+      ])
+    })
+
+    await recordOperation({
+      type: 'codex.version_linked',
+      sourceShapeId: command.sourceShapeId,
+      targetShapeId: command.targetShapeId,
+      arrowShapeId: arrowId,
+      linkType: command.linkType ?? 'version',
+      command,
+    })
+    showStatus('Linked canvas versions.', 2400)
+  }
+
   return (
     <div className="app">
       <div className="canvas">
@@ -953,6 +1025,13 @@ function getNativeShapeBounds(shape: TLShape): Bounds {
     y: shape.y,
     w: typeof props.w === 'number' && Number.isFinite(props.w) ? props.w : shape.type === 'note' ? 160 : 120,
     h: typeof props.h === 'number' && Number.isFinite(props.h) ? props.h : shape.type === 'note' ? 160 : 90,
+  }
+}
+
+function getBoundsCenter(bounds: Bounds) {
+  return {
+    x: bounds.x + bounds.w / 2,
+    y: bounds.y + bounds.h / 2,
   }
 }
 
