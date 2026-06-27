@@ -319,7 +319,25 @@ User clicks Send to Codex on a frame
 → Codex writes the result back to the canvas
 ```
 
-它不是“点击后立即生成”。立即生成只能出现在用户已经显式进入某个持续 Skill / 自动执行模式、或按钮本身明确叫 `Generate version` 且上下文里已经有完整执行意图时。默认 `Send to Codex` 应该降低误触成本，避免不必要的 API / token / generation credit 消耗。
+它不是“点击后立即生成”。默认 `Send to Codex` 应该降低误触成本，避免不必要的 API / token / generation credit 消耗。
+
+但这不意味着后续永远不能出现 `Generate version`。正确语义是：
+
+- `Send to Codex` 是默认桥接入口：把 frame / selection / asset / annotation context 发送给 Codex，等待用户在 Codex 对话里补充或确认意图；
+- `Generate version` 是 active skill / auto-run 入口：当用户已经在 Codex 中显式启用了某个场景 Skill，并经过多轮对话建立了稳定任务意图后，画布可以在 frame 上显示一个低摩擦的一键生成按钮；
+- 例如用户已经进入 `Product Marketing Set`、`Image Edit`、`Video Ad Keyframes`、`Reference to Video` 等 session mode，之后继续用 frame 框住素材和标注，点击 `Generate version` 就可以直接沿用当前 skill、provider policy、默认模型和输出策略；
+- `Generate version` 不能回到“白板自己拼 provider payload 并调用 API”的老路。它的本质仍然是触发 active Codex skill：读取 frame input → 执行 skill → 写回 canvas；
+- 如果没有 active skill / auto-run mode，按钮文案必须保持 `Send to Codex`，而不是暗示会立即消耗 generation credit。
+
+因此按钮语义是两层：
+
+```text
+No active skill:
+  Send to Codex -> publish context -> wait for Codex/user instruction
+
+Active skill / auto-run mode:
+  Generate version -> publish context -> active skill executes -> canvas writeback
+```
 
 Frame Input 文件是 `Send to Codex` 的附件化边界：
 
@@ -329,6 +347,46 @@ Frame Input 文件是 `Send to Codex` 的附件化边界：
 - 用户感知层应是 frame 截图：当前 fallback 是复制当前 frame PNG 到系统剪贴板，让用户自己粘贴到 Codex 输入框；如果 Codex 宿主开放 composer attachment API，则 `Send to Codex` 应自动截图当前 frame 并粘贴 / attach 到 Codex 输入框；
 - Codex 执行时以 Frame Input JSON 为主输入，截图只用于辅助视觉判断，避免模型只看截图而丢掉对象 id、素材路径、标注结构和写回位置；
 - Frame Input 必须保留源素材路径、frame id、对象/标注、推荐用户提示与默认处理指令，作为后续 skill/provider 调用的唯一可信入口。
+
+### 2.5 图片/视频生成编辑应该抽象为 Codex Skill
+
+图片生成、图片编辑、视频生成、参考生视频、视频帧重生成、未来 3D 生成，都不应该在白板中变成 provider 表单。它们应该抽象成可插拔的 **Codex agent skill**：
+
+```text
+Image generation skill
+  reads: prompt, selected frame/selection, references, style constraints
+  acts: generate image, insert media, create version, link lineage
+
+Image edit skill
+  reads: source image, bounded annotations, masks/boxes/arrows/notes
+  acts: edit source, place revised image, preserve parent version
+
+Video generation skill
+  reads: text prompt, reference images/videos/audio/3D when present
+  acts: choose text-to-video or reference-to-video mode, submit job, write back video/thumbnail
+
+Video frame revision skill
+  reads: source video, chosen frame/timecode, frame screenshot, annotations
+  acts: generate keyframe or revised shot, place result beside source video/frame
+
+3D generation / 3D revision skill
+  reads: image/video/frame reference, selected 3D view/camera snapshot
+  acts: generate or revise model asset, write back preview and model path
+```
+
+这些 skill 共享同一组 canvas contract：
+
+```text
+canvas.get_selection
+canvas.get_frame_context
+canvas.get_asset
+canvas.capture_frame / canvas.capture_selection
+canvas.insert_media
+canvas.create_version
+canvas.link_versions
+```
+
+Skill 可以由项目内置，也可以由用户自己在 Codex 中安装。白板不负责定义所有业务场景；白板只定义稳定的上下文读取、素材写回和版本血缘能力。这样项目才能既开源中立，又支持 Atlas / GPT image 2 / Seedance 2.0 / Kling / 未来 3D provider 的组合。
 
 首次进入画布默认保持空白：
 

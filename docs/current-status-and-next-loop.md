@@ -1,287 +1,219 @@
 # Current Status and Next Visible Loop
 
-Date: 2026-06-26
+Date: 2026-06-27
 
-## 1. One-sentence summary
+## 1. Stage verdict
 
-We are building a Codex-driven media canvas: users mark up images, video frames, or future 3D views on a tldraw canvas; Codex reads the bounded frame or selection; a media-generation action calls Atlas / Seedance / Kling / another provider; the generated result is written back to the canvas with visible lineage and saved metadata.
+We are in **Phase 0.5: Storage and Codex Bridge Stabilization**.
 
-We are not building a generic AI drawing whiteboard, and we are not copying the official tldraw agent chat panel as the product entry.
+The project is no longer trying to prove that the browser canvas can call a provider API directly. That path produced confusing source/reference handling and drifted away from the product goal.
 
-## 2. Why the recent work felt abstract
-
-The recent iterations were mostly “plumbing”:
+The canonical product loop is now:
 
 ```text
-Codex intent
-→ canvas command
-→ bounded frame context
-→ media action
-→ provider request
-→ executor
+User frames or selects media + annotations
+→ canvas exports structured context and optional screenshot
+→ Codex / active agent skill reads Frame Input
+→ Codex chooses the right image/video/3D skill and provider
+→ Codex writes the generated media back to canvas
+→ canvas places the result with visible lineage and local metadata
+```
+
+The canvas is a **visual context container and writeback surface**. Codex is the orchestration layer.
+
+## 2. What is real now
+
+- Native tldraw canvas with mostly native tldraw UI.
+- Default board opens blank.
+- Local image/video upload into `.codex-media-canvas/assets`.
+- Chunked upload for large media.
+- Bounded frame context extraction based on geometry, not only tldraw parent/child nesting.
+- Selection publishing for Codex tools.
+- Frame `Send to Codex` button.
+- Frame screenshot artifact saved under `.codex-media-canvas/frame-screenshots`.
+- Hidden Frame Input JSON saved under `.codex-media-canvas/frame-inputs`.
+- MCP-style tools for:
+  - `canvas.get_selection`
+  - `canvas.get_frame_context`
+  - `canvas.get_frame_request`
+  - `canvas.get_frame_input`
+  - `canvas.get_frame_screenshot`
+  - `canvas.capture_frame`
+  - `canvas.get_asset`
+  - `canvas.insert_media`
+  - `canvas.create_version`
+  - `canvas.agent_prompt`
+- Canvas writeback command polling for generated media placement.
+- Visible lineage arrow from source frame/context to generated result.
+- Floating annotation arrows that avoid tldraw target bindings.
+- Local canvas persistence with page snapshot, manifest, view state, and backups.
+
+## 3. What changed in Phase 0.5
+
+### 3.1 Persistence is no longer a single fragile file only
+
+The canvas still keeps a legacy compatibility file, but Phase 0.5 now writes a more explicit local store:
+
+```text
+.codex-media-canvas/
+  canvas/
+    manifest.json
+    document.json                  # legacy compatibility snapshot
+    view-state.json
+    backups/
+    pages/
+      <page-id>/
+        canvas.json
+  assets/
+  frame-inputs/
+  frame-screenshots/
+  metadata/
+  logs/
+  commands/
+```
+
+This follows the Cowart/tldraw direction more closely: document state, view state, media assets, frame inputs, and request metadata should not be mixed into one ambiguous artifact.
+
+### 3.2 `Send to Codex` is the default bridge
+
+Default behavior:
+
+```text
+Send to Codex
+→ save frame screenshot artifact
+→ save Frame Input JSON
+→ publish latest frame request
+→ wait for Codex/user instruction
+```
+
+This button should not spend generation credits on its own.
+
+### 3.3 `Generate version` will return only inside active skill mode
+
+Future behavior:
+
+```text
+Active skill / auto-run mode is on
+→ user frames media + annotations
+→ Generate version
+→ active Codex skill reads frame input
+→ skill executes with its provider policy
 → canvas writeback
 ```
 
-This plumbing is necessary because the product should not become a pile of whiteboard buttons. The long-term workflow should be:
+This preserves the low-friction Lovart/Cowart-style editing loop without turning the canvas into a provider form.
+
+### 3.4 Image/video generation and editing are skills
+
+The project should expose generation/editing as Codex agent skills, for example:
+
+- image generation
+- image edit
+- video generation
+- reference-to-video
+- video frame revision
+- 3D generation / revision
+
+Those skills share the same canvas contract instead of each adding new whiteboard buttons.
+
+## 4. Current primary loop to validate
 
 ```text
-User works in Codex
-→ a Codex Skill drives the canvas
-→ tldraw exposes canvas state and canvas actions
-→ providers generate media
-→ results return to the canvas
+1. Open the blank canvas.
+2. Upload or place media.
+3. Add annotations with notes/arrows/boxes.
+4. Frame the task region.
+5. Click Send to Codex.
+6. Codex reads canvas.get_frame_request / canvas.get_frame_input.
+7. User gives or confirms the instruction in Codex.
+8. Codex generates/edits through an active skill.
+9. Codex calls canvas.insert_media or canvas.create_version.
+10. Browser places the result next to the framed context with lineage.
 ```
 
-The official tldraw agent starter proved that an agent can understand and act on a canvas. But its agent chat panel is its own UI. In our product, Codex is the agent conversation layer.
+Acceptance for Phase 0.5:
 
-## 3. Current working chain
+- Codex can tell exactly which frame/selection is active.
+- Frame Input contains local/absolute asset paths, object ids, bounds, and annotation text.
+- Frame screenshot is saved as an auxiliary artifact, even if system clipboard copy fails.
+- Canvas reload preserves object positions.
+- Generated/writeback results are placed without relying on provider calls from the browser.
+- Documentation no longer treats browser-side provider execution as the main path.
 
-The current local spike now separates two paths:
+## 5. What remains mock or incomplete
 
-1. `Send to Codex` publishes context and waits for Codex/user instructions.
-2. explicit writeback tools place Codex-generated media back onto the canvas.
+- `canvas.capture_selection` is still not a first-class browser-generated artifact.
+- `canvas.link_versions` is not yet a separate MCP tool; lineage is currently created as part of `canvas.create_version`.
+- Direct provider executor code still exists for debugging/spike history and should be isolated further.
+- Active skill session mode is specified but not implemented.
+- Real image/video/3D skills are not packaged yet.
+- Host-level automatic composer attachment is not available; screenshot copy remains best-effort.
+- Full tldraw/Cowart-grade snapshot sanitization and multi-page history are not done.
 
-The intended interactive path is:
+## 6. Next implementation plan
 
-```text
-User clicks Send to Codex on a frame
-→ browser extracts bounded frame context
-→ browser exports the frame as PNG and tries to copy it to the system clipboard
-→ writes latest frame context
-→ saves the frame screenshot as a hidden PNG artifact
-→ writes a durable Frame Input JSON artifact
-→ writes latest Codex frame request with status: awaiting_user_instruction and frameInput.absolutePath
-→ user can paste the copied screenshot into the Codex composer
-→ host integration can later attach/paste the screenshot automatically when available
-→ Codex reads canvas.get_frame_request / canvas.get_selection / Frame Input
-→ Codex uses the screenshot only as auxiliary visual evidence
-→ Codex summarizes the task in conversation
-→ user confirms or adds instructions
-→ Codex executes the relevant skill/provider
-→ Codex calls canvas.insert_media / canvas.create_version
-→ browser places the result back with lineage
-```
+### Phase 0.5 closeout
 
-The older `canvas.agent_prompt` / provider-executor chain is still available as a spike/testing path, but it is no longer the primary product interaction.
+1. Harden local persistence:
+   - keep page-level snapshots;
+   - keep manifest and view state;
+   - keep backup snapshots;
+   - avoid running import/reposition logic during restore.
 
-The concrete send-to-Codex chain in code is:
+2. Complete Codex bridge tools:
+   - `canvas.get_frame_input`;
+   - `canvas.get_frame_screenshot`;
+   - `canvas.capture_frame`;
+   - `canvas.get_asset`;
+   - later: `canvas.capture_selection`, `canvas.link_versions`.
 
-```text
-Frame button
-→ sendFrameToCodex(...)
-→ collect frame + geometrically contained shape ids
-→ editor.toImage(exportShapeIds, { format: "png" })
-→ navigator.clipboard.write([ClipboardItem({ "image/png": blobPromise })])
-→ extractMaterializedFrameContext(...)
-→ publishFrameContext(...)
-→ publishCodexFrameRequest({ status: "awaiting_user_instruction" })
-→ .codex-media-canvas/frame-screenshots/*.png
-→ .codex-media-canvas/frame-inputs/frame-request-*.json
-→ canvas.get_frame_request / canvas.get_selection
-→ canvas.insert_media / canvas.create_version
-```
+3. Clean product docs:
+   - canvas is context bridge;
+   - skills own generation/editing;
+   - direct provider calls are debug-only;
+   - `Generate version` only appears in active skill mode.
 
-The user-facing handoff should feel like a screenshot was sent to Codex. The
-Frame Input JSON is the hidden source of truth for the agent: it is intentionally
-a real file so Codex can inspect the exact bounded input, but it should not be
-shown in canvas toast copy. The immediate fallback UX is: copy the frame PNG to
-the system clipboard and tell the user to paste it into the Codex composer. If
-the Codex desktop host exposes a composer attachment API, `Send to Codex` should
-paste/attach the same screenshot automatically, while Codex still uses the Frame
-Input JSON as the primary execution input.
+### Phase 0.6: active skill session mode
 
-Important implementation detail: the screenshot export must not depend on
-tldraw frame parenting. Users can visually place media and annotations inside a
-frame without making them children of that frame. `Send to Codex` therefore
-exports the selected frame plus shapes that are geometrically inside/overlapping
-the frame, matching the same bounded-context rule used by Frame Input.
-
-## 4. Current file map
-
-| Area | File | Role |
-| --- | --- | --- |
-| Canvas app | `phase0-tldraw-spike/src/App.tsx` | tldraw app, frame context extraction, command polling, canvas writeback |
-| Canvas command API | `phase0-tldraw-spike/src/api.ts` | browser-side API types and calls |
-| Frame context | `phase0-tldraw-spike/src/canvasContracts.ts` | extracts bounded frame media and annotations |
-| Prompt part | `phase0-tldraw-spike/src/agentPromptParts.ts` | converts frame context into `bounded_frame_context` |
-| Media action | `phase0-tldraw-spike/src/mediaActionContract.ts` | defines `generate-media` action and provider policy |
-| Action util | `phase0-tldraw-spike/src/generateMediaActionUtil.ts` | starter-style action boundary |
-| Provider request | `phase0-tldraw-spike/src/generationContract.ts` | provider-ready request format |
-| Provider payloads | `phase0-tldraw-spike/src/providerAdapter.ts` | Atlas / Seedance / Kling payload builders |
-| Local server | `phase0-tldraw-spike/server.mjs` | asset store, commands, executor, metadata |
-| MCP bridge | `phase0-tldraw-spike/mcp-server.mjs` | exposes canvas tools to Codex/MCP-style clients |
-| Runtime metadata | `.codex-media-canvas/metadata/` | latest frame/request/execution files |
-| Operation log | `.codex-media-canvas/logs/operations.jsonl` | durable history of canvas actions |
-
-## 5. What is real now vs. still mock
-
-### Real now
-
-- Native tldraw canvas.
-- Image/video upload through local asset store.
-- Chunked upload for large videos.
-- Bounded frame context extraction.
-- Native annotations captured as structured context.
-- Codex-style `canvas.agent_prompt` command.
-- `generate-media` action contract.
-- Provider payload generation for Atlas / Seedance / Kling.
-- Canvas writeback with generated media shape and lineage arrow.
-- Metadata and operation logging.
-- Installable local Codex plugin exposing canvas MCP tools.
-- `Send to Codex` frame requests that wait for conversation instructions instead of auto-generating.
-
-### Still mock / incomplete
-
-- The generated visual output is still placeholder SVG/MP4 unless a provider endpoint is configured.
-- Atlas adapter is implemented, but it requires `ATLASCLOUD_API_KEY` at server startup to make real billable calls.
-- Provider execution is still inside `server.mjs`, not a clean module.
-- No robust provider job state machine yet.
-- No real async polling for long-running provider jobs.
-- No production result materialization from remote URLs.
-- No first-class 3D asset shape / preview / provider mode yet.
-- First-run canvas is intentionally blank; seeded demos/examples are removed from the default path.
-
-## 6. The next visible loop
-
-The next phase should not add more invisible abstractions. It should produce one user-visible loop:
+Goal:
 
 ```text
-Select or frame a media task
-→ send a Codex-style agent prompt with provider: "atlas"
-→ create a provider job record
-→ show/record provider status clearly
-→ if ATLASCLOUD_API_KEY is missing, show "skipped: key not configured"
-→ if ATLASCLOUD_API_KEY is configured, upload references and call Atlas Cloud
-→ materialize real output
-→ write result back to canvas
-→ preserve lineage and execution metadata
-```
-
-This loop should make it obvious whether we are using mock output or real provider output.
-
-## 7. Next implementation plan
-
-### Step 1: Extract provider executor module
-
-Move provider execution out of `server.mjs` into a dedicated module:
-
-```text
-phase0-tldraw-spike/lib/provider-executor.mjs
-```
-
-It should own:
-
-- provider endpoint selection;
-- API key lookup;
-- provider payload selection;
-- external request execution;
-- normalized execution result;
-- skipped / failed / succeeded status.
-
-Acceptance:
-
-- `server.mjs` no longer contains provider-specific branching.
-- Existing mock generation behavior still works.
-- `npm test` and `npm run build` pass.
-
-### Step 2: Add explicit provider job metadata
-
-Write a provider job file for each execution:
-
-```text
-.codex-media-canvas/executions/<execution-id>.json
-```
-
-The job should include:
-
-- provider;
-- endpoint configured or not;
-- selected provider payload;
-- status;
-- prompt;
-- references;
-- output target;
-- external response summary;
-- timestamps.
-
-Acceptance:
-
-- latest execution result clearly states whether provider execution was mock, skipped, failed, or succeeded.
-- operation log has enough data to debug a provider call without reading the browser state.
-
-### Step 3: Atlas adapter contract
-
-Implemented:
-
-```text
-phase0-tldraw-spike/lib/providers/atlas.mjs
-```
-
-It should map:
-
-```text
-ProviderReadyGenerationRequest / AtlasProviderPayload
-→ Atlas API request
-→ normalized provider result
-→ local materialized output
+Codex activates a media skill
+→ canvas knows active skill mode
+→ frame button changes from Send to Codex to Generate version
+→ click triggers a skill-owned request, not browser provider execution
 ```
 
 Acceptance:
 
-- With `ATLASCLOUD_API_KEY` configured, the executor calls Atlas instead of mock-only execution.
-- Without key, execution is skipped with a clear reason.
-- The canvas result makes provider status visible in metadata.
+- A visible but minimal active-skill indicator exists.
+- The frame button text changes only when active skill mode is present.
+- Generated output still goes through Codex writeback tools.
 
-### Step 4: Materialize real provider outputs
+### Phase 1: official tldraw agent architecture migration
 
-Support provider outputs such as:
+Goal:
 
-- remote image URL;
-- remote video URL;
-- base64 image/video;
-- local file path;
-- job id requiring polling.
+- port useful pieces from the official tldraw agent starter:
+  - prompt parts;
+  - action schemas;
+  - action history;
+  - structured request lifecycle;
+  - selected/context/screenshot parts.
+- keep Codex as the conversation layer.
+- do not copy the official chat panel as the product entry.
 
 Acceptance:
 
-- real provider output is copied into `.codex-media-canvas/assets/...`;
-- canvas preview points to the local stored asset;
-- original provider output URI is preserved in execution metadata.
+- bounded frame context is represented as an agent prompt part;
+- media generation/editing is an action schema;
+- Codex skills can drive the canvas without custom per-button logic.
 
-## 8. What we should avoid next
+## 7. Things to avoid
 
-- Do not keep adding whiteboard buttons.
-- Do not build a parallel chat panel inside the canvas.
-- Do not make provider config a visible model playground.
-- Do not continue abstracting action contracts without a visible provider loop.
-- Do not call Atlas “done” until real output is materialized and written back.
-
-## 9. Immediate next task
-
-Implement Step 1:
-
-```text
-Extract provider execution from server.mjs into lib/provider-executor.mjs
-```
-
-Then verify:
-
-```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
-npm run build
-npm test
-```
-
-Manual validation after server restart:
-
-```bash
-curl -X POST http://127.0.0.1:5176/api/agent/prompt \
-  -H 'content-type: application/json' \
-  -d '{"prompt":"Create a premium revised version from this frame.","provider":"atlas","outputMediaType":"image"}'
-```
-
-Expected result without Atlas endpoint:
-
-- canvas still writes a mock preview back;
-- latest execution result says external execution is skipped;
-- provider job metadata says `ATLASCLOUD_API_KEY` is not configured.
+- Do not rebuild tldraw chrome unless absolutely necessary.
+- Do not create a whiteboard skill marketplace panel.
+- Do not make provider/model selection the visible core UI.
+- Do not treat API success as product success if source/reference/annotation context is wrong.
+- Do not show debug JSON panels in the user-facing canvas.
+- Do not use browser-side provider execution as the primary loop.

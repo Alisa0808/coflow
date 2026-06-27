@@ -259,7 +259,8 @@ The starter kit already has the lifecycle shape for this.
 | --- | --- | --- |
 | custom frame JSON side panel | replace | prompt parts + chat/action history |
 | manual `Read frame context` button | mostly replace | prompt parts gathered per request |
-| frame `Generate` button | keep as shortcut only | `agent.prompt({ bounds })` |
+| frame `Send to Codex` button | keep as default bridge | publish Frame Input, screenshot, and pending request |
+| frame `Generate version` button | keep only in active skill / auto-run mode | `agent.prompt({ bounds, activeSkill })` |
 | custom generation request schema | keep, wrap as action payload | `generate-media` action schema |
 | provider payload builders | keep | called by `GenerateMediaActionUtil` |
 | mock executor / Atlas executor | keep | action implementation backend |
@@ -464,12 +465,22 @@ Acceptance:
 
 The official starter keeps tldraw UI mostly native and adds agent-specific overlays/tools/chat. This confirms our recent rollback was the right move.
 
-### 2. “Frame generate button” should not be the core architecture
+### 2. Frame buttons are semantic shortcuts, not the core architecture
 
-The button is useful as a local affordance, but the canonical action should be:
+The default button is `Send to Codex`: it publishes context and waits for Codex/user instruction.
+
+`Generate version` should still exist later, but only when the user has already activated a scenario skill or auto-run mode. In that state the button means “run the current active skill against this bounded frame,” not “the browser should choose a provider and call an API.”
+
+The canonical action remains:
 
 ```text
-Codex Skill / Chat Prompt -> Agent Request -> Prompt Parts -> Action Schema -> Action Util -> Provider Executor -> Canvas Writeback
+Codex Skill / Chat Prompt
+-> Agent Request
+-> Prompt Parts
+-> Action Schema
+-> Action Util
+-> Provider Executor
+-> Canvas Writeback
 ```
 
 ### 3. Our product differentiation is media-generation actions, not generic canvas actions
@@ -502,19 +513,25 @@ Do not continue adding features to the current spike as-is.
 Recommended next task:
 
 ```text
-Create a new branch/folder: phase1-agent-starter-migration
-Port the official tldraw agent shell into our project while preserving:
+Finish Phase 0.5 bridge stability first:
+  - page-level local canvas persistence
+  - Frame Input / screenshot / asset MCP read tools
+  - clean docs that keep direct provider execution debug-only
+
+Then create a new branch/folder: phase1-agent-starter-migration
+Port the official tldraw agent shell concepts into our project while preserving:
   - existing local asset store
   - existing upload behavior
   - existing provider payload builders
   - native tldraw UI
+  - Codex as the conversation layer
 ```
 
 The first concrete milestone should be:
 
 ```text
-In our app, show the official-style chat panel and successfully call agent.prompt(...)
-without yet generating media.
+In our app, expose official-style agent.prompt(...) / request semantics
+without making the official chat panel the product entry.
 ```
 
 After that, migrate `canvas.get_frame_context` into a custom prompt part.

@@ -1,5 +1,5 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
@@ -7,6 +7,9 @@ const workspaceRoot = process.env.WORKSPACE_ROOT || join(root, '..')
 const latestSelectionPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-selection.json')
 const latestFrameContextPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-frame-context.json')
 const latestCodexFrameRequestPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-codex-frame-request.json')
+const latestFrameInputPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-frame-input.json')
+const latestFrameScreenshotPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-frame-screenshot.json')
+const storeRoot = join(workspaceRoot, '.codex-media-canvas')
 const commandsRoot = join(workspaceRoot, '.codex-media-canvas', 'commands')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
 const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
@@ -37,6 +40,65 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'canvas.get_frame_input',
+    description:
+      'Read the latest hidden Frame Input JSON artifact created by Send to Codex. This is the primary structured input for Codex/Skills.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'canvas.get_frame_screenshot',
+    description:
+      'Read the latest frame screenshot artifact metadata created by Send to Codex. The screenshot is auxiliary visual evidence; use Frame Input as the source of truth.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        includeBase64: {
+          type: 'boolean',
+          description: 'When true, include base64 PNG bytes. Defaults to false so responses stay compact.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'canvas.capture_frame',
+    description:
+      'Return the latest saved frame screenshot artifact. In Phase 0.5, capture is produced by the browser when the user clicks Send to Codex.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        includeBase64: {
+          type: 'boolean',
+          description: 'When true, include base64 PNG bytes. Defaults to false.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'canvas.get_asset',
+    description:
+      'Read local metadata for a canvas asset by absolutePath or .codex-media-canvas localPath. This helps Codex/Skills verify references before generation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        localPath: {
+          type: 'string',
+          description: 'A path such as .codex-media-canvas/assets/images/foo.png.',
+        },
+        absolutePath: {
+          type: 'string',
+          description: 'An absolute local filesystem path inside the workspace canvas store.',
+        },
+      },
       additionalProperties: false,
     },
   },
@@ -250,6 +312,42 @@ async function handleLine(line) {
       })
     }
 
+    if (toolName === 'canvas.get_frame_input') {
+      const payload = await readLatestFrameInput()
+      return respond(id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload, null, 2),
+          },
+        ],
+      })
+    }
+
+    if (toolName === 'canvas.get_frame_screenshot' || toolName === 'canvas.capture_frame') {
+      const payload = await readLatestFrameScreenshot(Boolean(params?.arguments?.includeBase64))
+      return respond(id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload, null, 2),
+          },
+        ],
+      })
+    }
+
+    if (toolName === 'canvas.get_asset') {
+      const payload = await readCanvasAsset(params?.arguments ?? {})
+      return respond(id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload, null, 2),
+          },
+        ],
+      })
+    }
+
     if (toolName === 'canvas.create_version' || toolName === 'canvas.agent_prompt' || toolName === 'canvas.insert_media') {
       const payload = await enqueueCanvasCommand(params?.arguments ?? {}, toolName)
       return respond(id, {
@@ -294,7 +392,7 @@ async function readLatestFrameContext() {
       updatedAt: null,
       source: 'phase0-tldraw-spike',
       context: null,
-      warning: 'No frame context has been published yet. Click Read frame context in the canvas first.',
+      warning: 'No frame context has been published yet. Select a frame and click Send to Codex in the canvas first.',
     }
   }
 }
@@ -310,6 +408,96 @@ async function readLatestCodexFrameRequest() {
       warning: 'No Codex frame request has been published yet. Select a frame and click Send to Codex in the canvas.',
     }
   }
+}
+
+async function readLatestFrameInput() {
+  try {
+    const latest = JSON.parse(await readFile(latestFrameInputPath, 'utf8'))
+    const absolutePath = latest?.frameInput?.absolutePath
+    const content = absolutePath ? JSON.parse(await readFile(absolutePath, 'utf8')) : undefined
+    return {
+      ...latest,
+      content,
+    }
+  } catch {
+    return {
+      updatedAt: null,
+      source: 'phase0-tldraw-spike',
+      frameInput: null,
+      warning: 'No Frame Input artifact has been published yet. Select a frame and click Send to Codex in the canvas.',
+    }
+  }
+}
+
+async function readLatestFrameScreenshot(includeBase64 = false) {
+  try {
+    const latest = JSON.parse(await readFile(latestFrameScreenshotPath, 'utf8'))
+    const screenshot = latest?.screenshot
+    if (!includeBase64 || !screenshot?.absolutePath) return latest
+    const bytes = await readFile(screenshot.absolutePath)
+    return {
+      ...latest,
+      screenshot: {
+        ...screenshot,
+        base64: bytes.toString('base64'),
+      },
+    }
+  } catch {
+    return {
+      updatedAt: null,
+      source: 'phase0-tldraw-spike',
+      screenshot: null,
+      warning: 'No frame screenshot has been saved yet. Select a frame and click Send to Codex in the canvas.',
+    }
+  }
+}
+
+async function readCanvasAsset(args) {
+  const absolutePath = resolveReadableCanvasAssetPath(args.absolutePath, args.localPath)
+  if (!absolutePath) {
+    return {
+      ok: false,
+      error: 'Provide absolutePath or .codex-media-canvas localPath.',
+    }
+  }
+
+  try {
+    const info = await stat(absolutePath)
+    return {
+      ok: true,
+      absolutePath,
+      localPath: toCanvasLocalPath(absolutePath),
+      bytes: info.size,
+      updatedAt: info.mtime.toISOString(),
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      absolutePath,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function resolveReadableCanvasAssetPath(absolutePath, localPath) {
+  if (typeof localPath === 'string' && localPath.startsWith('.codex-media-canvas/')) {
+    const normalized = normalize(join(workspaceRoot, localPath))
+    if (normalized.startsWith(storeRoot)) return normalized
+    return undefined
+  }
+
+  if (typeof absolutePath === 'string') {
+    const normalized = normalize(absolutePath)
+    if (normalized.startsWith(storeRoot)) return normalized
+  }
+
+  return undefined
+}
+
+function toCanvasLocalPath(absolutePath) {
+  const normalized = normalize(absolutePath)
+  if (!normalized.startsWith(storeRoot)) return undefined
+  return `.codex-media-canvas${normalized.slice(storeRoot.length)}`
 }
 
 async function enqueueCanvasCommand(args, toolName) {

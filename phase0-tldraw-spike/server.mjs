@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { execFile } from 'node:child_process'
-import { mkdir, readFile, stat, writeFile, appendFile, readdir, rm } from 'node:fs/promises'
-import { basename, extname, join, normalize } from 'node:path'
+import { mkdir, readFile, stat, writeFile, appendFile, readdir, rm, rename, copyFile } from 'node:fs/promises'
+import { basename, dirname, extname, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { prepareProviderExecution } from './lib/provider-executor.mjs'
@@ -19,6 +19,8 @@ const assetsRoot = join(storeRoot, 'assets')
 const executionsRoot = join(storeRoot, 'executions')
 const uploadsRoot = join(storeRoot, 'uploads')
 const canvasRoot = join(storeRoot, 'canvas')
+const canvasPagesRoot = join(canvasRoot, 'pages')
+const canvasBackupsRoot = join(canvasRoot, 'backups')
 const frameInputsRoot = join(storeRoot, 'frame-inputs')
 const frameScreenshotsRoot = join(storeRoot, 'frame-screenshots')
 const latestFrameContextPath = join(metadataRoot, 'latest-frame-context.json')
@@ -30,6 +32,8 @@ const latestFrameScreenshotPath = join(metadataRoot, 'latest-frame-screenshot.js
 const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
 const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
 const canvasDocumentPath = join(canvasRoot, 'document.json')
+const canvasManifestPath = join(canvasRoot, 'manifest.json')
+const canvasViewStatePath = join(canvasRoot, 'view-state.json')
 const operationsLogPath = join(logsRoot, 'operations.jsonl')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
 
@@ -44,6 +48,8 @@ await mkdir(assetsRoot, { recursive: true })
 await mkdir(executionsRoot, { recursive: true })
 await mkdir(uploadsRoot, { recursive: true })
 await mkdir(canvasRoot, { recursive: true })
+await mkdir(canvasPagesRoot, { recursive: true })
+await mkdir(canvasBackupsRoot, { recursive: true })
 await mkdir(frameInputsRoot, { recursive: true })
 await mkdir(frameScreenshotsRoot, { recursive: true })
 
@@ -88,14 +94,14 @@ const server = createServer(async (request, response) => {
       return sendJson(response, { ok: true })
     }
 
-    if (url.pathname === '/api/canvas/document' && request.method === 'GET') {
+    if ((url.pathname === '/api/canvas/document' || url.pathname === '/api/canvas') && request.method === 'GET') {
       return sendJson(response, {
         ok: true,
-        document: await readJsonFile(canvasDocumentPath, null),
+        document: await readCanvasDocument(),
       })
     }
 
-    if (url.pathname === '/api/canvas/document' && (request.method === 'PUT' || request.method === 'POST')) {
+    if ((url.pathname === '/api/canvas/document' || url.pathname === '/api/canvas') && (request.method === 'PUT' || request.method === 'POST')) {
       const body = await readJsonBody(request)
       if (!body?.snapshot || typeof body.snapshot !== 'object') {
         return sendJson(response, { ok: false, error: 'Canvas document snapshot is required.' }, 400)
@@ -110,7 +116,7 @@ const server = createServer(async (request, response) => {
         camera: normalizeCamera(body.camera),
         snapshot: body.snapshot,
       }
-      await writeJson(canvasDocumentPath, document)
+      await writeCanvasDocument(document)
       await appendOperation({
         type: 'canvas.document.saved',
         currentPageId: document.currentPageId,
@@ -118,6 +124,27 @@ const server = createServer(async (request, response) => {
         clientVersion: document.clientVersion,
       })
       return sendJson(response, { ok: true, document })
+    }
+
+    if (url.pathname === '/api/canvas/view-state' && request.method === 'GET') {
+      return sendJson(response, {
+        ok: true,
+        viewState: await readJsonFile(canvasViewStatePath, null),
+      })
+    }
+
+    if (url.pathname === '/api/canvas/view-state' && (request.method === 'PUT' || request.method === 'POST')) {
+      const body = await readJsonBody(request)
+      const viewState = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        source: 'phase0-tldraw-spike',
+        currentPageId: typeof body.currentPageId === 'string' ? body.currentPageId : undefined,
+        camera: normalizeCamera(body.camera),
+      }
+      await writeJsonAtomic(canvasViewStatePath, viewState)
+      await appendOperation({ type: 'canvas.view_state.saved', currentPageId: viewState.currentPageId, camera: viewState.camera })
+      return sendJson(response, { ok: true, viewState })
     }
 
     if (url.pathname === '/api/generation-requests' && request.method === 'POST') {
@@ -385,7 +412,75 @@ async function readJsonFile(path, fallback) {
 }
 
 async function writeJson(path, data) {
-  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`)
+  await writeJsonAtomic(path, data)
+}
+
+async function writeJsonAtomic(path, data) {
+  await mkdir(dirname(path), { recursive: true })
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(tempPath, `${JSON.stringify(data, null, 2)}\n`)
+  await rename(tempPath, path)
+}
+
+async function readCanvasDocument() {
+  const manifest = await readJsonFile(canvasManifestPath, null)
+  const activePageId = typeof manifest?.activePageId === 'string' ? manifest.activePageId : undefined
+  if (activePageId) {
+    const pageDocument = await readJsonFile(getCanvasPageDocumentPath(activePageId), null)
+    if (pageDocument?.snapshot) return pageDocument
+  }
+
+  return readJsonFile(canvasDocumentPath, null)
+}
+
+async function writeCanvasDocument(document) {
+  const activePageId = sanitizeFilePart(document.currentPageId || 'page')
+  const pageDocumentPath = getCanvasPageDocumentPath(activePageId)
+  const manifest = {
+    version: 1,
+    updatedAt: document.updatedAt,
+    source: document.source,
+    activePageId,
+    pages: [
+      {
+        id: activePageId,
+        localPath: `.codex-media-canvas/canvas/pages/${activePageId}/canvas.json`,
+        updatedAt: document.updatedAt,
+      },
+    ],
+    legacyDocumentPath: '.codex-media-canvas/canvas/document.json',
+    storageMode: 'page-snapshot-v1',
+  }
+
+  await backupCanvasFileIfPresent(pageDocumentPath, activePageId)
+  await writeJsonAtomic(pageDocumentPath, document)
+  await writeJsonAtomic(canvasDocumentPath, document)
+  await writeJsonAtomic(canvasManifestPath, manifest)
+  if (document.camera || document.currentPageId) {
+    await writeJsonAtomic(canvasViewStatePath, {
+      version: 1,
+      updatedAt: document.updatedAt,
+      source: document.source,
+      currentPageId: document.currentPageId,
+      camera: document.camera,
+    })
+  }
+}
+
+function getCanvasPageDocumentPath(pageId) {
+  return join(canvasPagesRoot, sanitizeFilePart(pageId), 'canvas.json')
+}
+
+async function backupCanvasFileIfPresent(path, pageId) {
+  try {
+    await stat(path)
+  } catch {
+    return
+  }
+
+  const backupName = `${sanitizeFilePart(pageId)}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+  await mkdir(canvasBackupsRoot, { recursive: true })
+  await copyFile(path, join(canvasBackupsRoot, backupName))
 }
 
 async function appendOperation(operation) {
