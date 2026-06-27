@@ -254,6 +254,7 @@ Acceptance:
 
 ## 7. Things to avoid
 
+- Do not patch whiteboard elements by inventing custom structures first. For any tldraw canvas element change, inspect the official tldraw source/schema/starter implementation first, then optimize on top of the native `asset` / `shape` / `binding` / `store` model. Custom fields or custom shapes are allowed only when the native schema cannot represent the product need, and the reason must be documented.
 - Do not rebuild tldraw chrome unless absolutely necessary.
 - Do not create a whiteboard skill marketplace panel.
 - Do not make provider/model selection the visible core UI.
