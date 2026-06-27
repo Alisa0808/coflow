@@ -324,10 +324,11 @@ User clicks Send to Codex on a frame
 但这不意味着后续永远不能出现 `Generate version`。正确语义是：
 
 - `Send to Codex` 是默认桥接入口：把 frame / selection / asset / annotation context 发送给 Codex，等待用户在 Codex 对话里补充或确认意图；
-- `Generate version` 是 active skill / auto-run 入口：当用户已经在 Codex 中显式启用了某个场景 Skill，并经过多轮对话建立了稳定任务意图后，画布可以在 frame 上显示一个低摩擦的一键生成按钮；
+- `Generate version` 是 active skill / auto-run 入口：当用户已经在 Codex 中显式启用了某个场景 Skill，并经过多轮对话建立了稳定任务意图后，画布可以在 frame 上额外显示一个低摩擦的一键生成按钮；
 - 例如用户已经进入 `Product Marketing Set`、`Image Edit`、`Video Ad Keyframes`、`Reference to Video` 等 session mode，之后继续用 frame 框住素材和标注，点击 `Generate version` 就可以直接沿用当前 skill、provider policy、默认模型和输出策略；
 - `Generate version` 不能回到“白板自己拼 provider payload 并调用 API”的老路。它的本质仍然是触发 active Codex skill：读取 frame input → 执行 skill → 写回 canvas；
-- 如果没有 active skill / auto-run mode，按钮文案必须保持 `Send to Codex`，而不是暗示会立即消耗 generation credit。
+- `Send to Codex` 必须常驻：即使已经进入 active skill / auto-run mode，也要允许用户只把 frame 发给 Codex、继续补充指令，而不是被迫立即生成；
+- 如果没有 active skill / auto-run mode，只显示 `Send to Codex`，不能暗示会立即消耗 generation credit。
 
 因此按钮语义是两层：
 
@@ -336,6 +337,7 @@ No active skill:
   Send to Codex -> publish context -> wait for Codex/user instruction
 
 Active skill / auto-run mode:
+  Send to Codex -> publish context -> wait for Codex/user instruction
   Generate version -> publish context -> active skill executes -> canvas writeback
 ```
 
@@ -715,7 +717,7 @@ Phase 0.6 的实现边界：
 - 用 `.codex-media-canvas/metadata/active-skill-session.json` 保存当前 active skill session；
 - Codex / MCP 可以激活或清除 session；
 - session 激活后，画布只显示一个轻量 active skill 状态，不显示 skill marketplace；
-- 选中 frame 后，按钮从 `Send to Codex` 切换为 `Generate version`；
+- 选中 frame 后，`Send to Codex` 常驻；如果 active skill `autoRun` 开启，则额外显示 `Generate version`；
 - 点击 `Generate version` 仍然会先生成 Frame Input，再触发 active skill，而不是让白板自己拼 provider payload；
 - active skill 执行默认走真实 provider boundary，例如 Atlas 上的 GPT image 2 / Seedance 2.0；
 - 如果 provider key 缺失或调用失败，应该明确失败，而不是插入 mock 图或 mock 视频。

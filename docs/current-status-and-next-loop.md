@@ -51,7 +51,7 @@ The canvas is a **visual context container and writeback surface**. Codex is the
 - Local canvas persistence with page snapshot, manifest, view state, and backups.
 - Active Skill Session metadata under `.codex-media-canvas/metadata/active-skill-session.json`.
 - Minimal active-skill indicator in the canvas.
-- Frame action switches from `Send to Codex` to `Generate version` only when active skill `autoRun` is enabled.
+- Frame action always keeps `Send to Codex`; `Generate version` is added only when active skill `autoRun` is enabled.
 - Active skill execution now routes to the real provider boundary by default (`atlas`), and must fail visibly instead of inserting mock media.
 
 ## 3. What changed in Phase 0.5
@@ -197,14 +197,14 @@ Goal:
 ```text
 Codex activates a media skill
 → canvas knows active skill mode
-→ frame button changes from Send to Codex to Generate version
+→ frame action shows Send to Codex plus Generate version
 → click triggers a skill-owned request, not browser provider execution
 ```
 
 Acceptance:
 
 - A visible but minimal active-skill indicator exists.
-- The frame button text changes only when active skill mode is present.
+- `Send to Codex` stays visible in active skill mode; `Generate version` is an additional one-click execution shortcut.
 - Generated output still goes through Codex writeback tools.
 - Phase 0.6 requires a real provider key for actual generation; default provider is `atlas`.
 - Missing credentials or provider failure must produce a visible error, not a mock fallback.

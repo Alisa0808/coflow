@@ -95,7 +95,7 @@ Current Phase 0.6 implementation note:
 - It does not call a provider by default.
 - Codex / an active Codex agent skill is responsible for choosing image/video/3D skill, provider, model, mode, and parameters.
 - Browser-side provider execution may exist as a debug spike path only; it is not the canonical product path.
-- `Generate version` appears only when an active skill / auto-run mode is already established.
+- `Generate version` appears only when an active skill / auto-run mode is already established, and it must appear as an additional shortcut rather than replacing `Send to Codex`.
 - Phase 0.6 active skill execution uses the real provider boundary by default.
 - If provider credentials are missing or the provider fails, the canvas reports failure instead of inserting mock media.
 
@@ -181,7 +181,8 @@ browser places output media and lineage arrow
 
 Rules:
 
-- `Send to Codex` remains the default when there is no active Skill.
+- `Send to Codex` remains available in both context mode and active Skill mode.
+- In active Skill mode, the frame action surface should show both `Send to Codex` and `Generate version`: the first exports context for Codex/user follow-up, the second immediately runs the active Skill.
 - `Generate version` must not appear as a generic provider button.
 - Active Skill mode is sticky only as session metadata; it is not a whiteboard Skill marketplace.
 - Real provider selection stays inside Codex Skill logic.

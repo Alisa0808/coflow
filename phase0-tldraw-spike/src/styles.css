@@ -214,26 +214,38 @@ body {
   -webkit-line-clamp: 4;
 }
 
-.frame-action-button {
+.frame-action-group {
   position: fixed;
   z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow:
+    0 12px 28px rgba(15, 23, 42, 0.12),
+    0 1px 2px rgba(15, 23, 42, 0.08);
+  pointer-events: auto;
+  transform: translateY(-100%);
+  backdrop-filter: blur(14px);
+}
+
+.frame-action-button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   border: 1px solid rgba(15, 23, 42, 0.1);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.94);
-  box-shadow:
-    0 10px 24px rgba(15, 23, 42, 0.12),
-    0 1px 2px rgba(15, 23, 42, 0.08);
+  box-shadow: none;
   color: #111827;
   cursor: pointer;
   font: 600 12px/1 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   letter-spacing: -0.01em;
   padding: 7px 9px;
   pointer-events: auto;
-  transform: translateY(-100%);
-  backdrop-filter: blur(12px);
 }
 
 .frame-action-button:hover {
@@ -245,7 +257,7 @@ body {
 }
 
 .frame-action-button:active {
-  transform: translateY(-100%) scale(0.98);
+  transform: scale(0.98);
 }
 
 .frame-action-button__icon {
@@ -260,10 +272,16 @@ body {
 
 .frame-action-button[data-mode='generate'] {
   border-color: rgba(37, 99, 235, 0.22);
+  background: #2563eb;
+  color: #ffffff;
 }
 
 .frame-action-button[data-mode='generate'] .frame-action-button__icon {
-  background: #2563eb;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.frame-action-button[data-mode='send'] .frame-action-button__icon {
+  background: #111827;
 }
 
 .frame-action-button__icon svg {

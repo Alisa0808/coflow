@@ -857,10 +857,8 @@ function FrameCodexAction({
   onSend: (frameId: string) => void
 }) {
   const isGenerateMode = Boolean(activeSkillSession?.autoRun)
-  const label = isGenerateMode ? 'Generate version' : 'Send to Codex'
-  const title = isGenerateMode
-    ? `Generate a new version from ${action.frameName} using ${activeSkillSession?.displayName}`
-    : `Send ${action.frameName} context to Codex`
+  const sendTitle = `Send ${action.frameName} context to Codex`
+  const generateTitle = `Generate a new version from ${action.frameName} using ${activeSkillSession?.displayName}`
 
   function keepPrimaryPointerOnButton(event: PointerEvent<HTMLButtonElement> | MouseEvent<HTMLButtonElement>) {
     if ('button' in event && event.button !== 0) return
@@ -868,31 +866,58 @@ function FrameCodexAction({
   }
 
   return (
-    <button
-      type="button"
-      className="frame-action-button"
-      data-mode={isGenerateMode ? 'generate' : 'send'}
+    <div
+      className="frame-action-group"
       style={{ left: action.left, top: action.top }}
-      onPointerDownCapture={keepPrimaryPointerOnButton}
-      onPointerUpCapture={keepPrimaryPointerOnButton}
-      onMouseDownCapture={keepPrimaryPointerOnButton}
       onContextMenu={(event) => event.stopPropagation()}
-      onClick={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        if (isGenerateMode) onGenerate(action.frameId)
-        else onSend(action.frameId)
-      }}
-      title={title}
     >
-      <span className="frame-action-button__icon" aria-hidden="true">
-        <svg viewBox="0 0 16 16" focusable="false">
-          <path d="M8.3 1.5 9.8 5l3.7 1.4-3.7 1.5-1.5 3.6-1.5-3.6L3.1 6.4 6.8 5l1.5-3.5Z" />
-          <path d="M3.7 10.1 4.4 12l1.9.7-1.9.8-.7 1.8-.8-1.8-1.8-.8 1.8-.7.8-1.9Z" />
-        </svg>
-      </span>
-      <span>{label}</span>
-    </button>
+      <button
+        type="button"
+        className="frame-action-button"
+        data-mode="send"
+        onPointerDownCapture={keepPrimaryPointerOnButton}
+        onPointerUpCapture={keepPrimaryPointerOnButton}
+        onMouseDownCapture={keepPrimaryPointerOnButton}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onSend(action.frameId)
+        }}
+        title={sendTitle}
+      >
+        <span className="frame-action-button__icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <path d="M3 2.75A1.75 1.75 0 0 1 4.75 1h6.5A1.75 1.75 0 0 1 13 2.75v10.5A1.75 1.75 0 0 1 11.25 15h-6.5A1.75 1.75 0 0 1 3 13.25V2.75Zm1.5 0v10.5c0 .14.11.25.25.25h6.5c.14 0 .25-.11.25-.25V2.75a.25.25 0 0 0-.25-.25h-6.5a.25.25 0 0 0-.25.25Z" />
+            <path d="M7.25 4.75h1.5v3.69l1.22-1.22 1.06 1.06L8 11.31 4.97 8.28l1.06-1.06 1.22 1.22V4.75Z" />
+          </svg>
+        </span>
+        <span>Send to Codex</span>
+      </button>
+      {isGenerateMode ? (
+        <button
+          type="button"
+          className="frame-action-button"
+          data-mode="generate"
+          onPointerDownCapture={keepPrimaryPointerOnButton}
+          onPointerUpCapture={keepPrimaryPointerOnButton}
+          onMouseDownCapture={keepPrimaryPointerOnButton}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            onGenerate(action.frameId)
+          }}
+          title={generateTitle}
+        >
+          <span className="frame-action-button__icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" focusable="false">
+              <path d="M8.3 1.5 9.8 5l3.7 1.4-3.7 1.5-1.5 3.6-1.5-3.6L3.1 6.4 6.8 5l1.5-3.5Z" />
+              <path d="M3.7 10.1 4.4 12l1.9.7-1.9.8-.7 1.8-.8-1.8-1.8-.8 1.8-.7.8-1.9Z" />
+            </svg>
+          </span>
+          <span>Generate version</span>
+        </button>
+      ) : null}
+    </div>
   )
 }
 
