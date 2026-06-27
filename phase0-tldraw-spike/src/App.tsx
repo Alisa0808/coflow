@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import {
   AssetRecordType,
+  DefaultColorStyle,
   StateNode,
   Tldraw,
   createShapeId,
+  startEditingShapeWithRichText,
   toRichText,
   type Editor,
   type TLAsset,
   type TLAssetId,
   type TLAssetStore,
+  type TLArrowShape,
   type TLShape,
   type TLShapeId,
   type TLShapePartial,
@@ -58,6 +61,8 @@ const FLOATING_ARROW_MIN_LENGTH = 8
 const FLOATING_ARROW_BEND_RATIO = 0.12
 const FLOATING_ARROW_MIN_BEND = 12
 const FLOATING_ARROW_MAX_BEND = 32
+const FLOATING_ARROW_DEFAULT_COLOR = 'red'
+const FLOATING_ARROW_LABEL_POSITION = 0
 
 type FrameActionState = {
   frameId: string
@@ -128,6 +133,7 @@ class FloatingArrowPointing extends StateNode {
   onEnter() {
     const origin = this.editor.inputs.getOriginPagePoint()
     const arrowId = createShapeId()
+    const color = getAnnotationArrowColor(this.editor)
     this.arrowId = arrowId
     this.origin = { x: origin.x, y: origin.y }
     this.markId = this.editor.markHistoryStoppingPoint(`creating_floating_arrow:${arrowId}`)
@@ -145,15 +151,15 @@ class FloatingArrowPointing extends StateNode {
         dash: 'draw',
         size: 'm',
         fill: 'none',
-        color: 'black',
-        labelColor: 'black',
+        color,
+        labelColor: color,
         bend: 0,
         start: { x: 0, y: 0 },
         end: { x: 1, y: 0 },
         arrowheadStart: 'none',
         arrowheadEnd: 'arrow',
         richText: toRichText(''),
-        labelPosition: 0.5,
+        labelPosition: FLOATING_ARROW_LABEL_POSITION,
         font: 'draw',
         scale: this.editor.getResizeScaleFactor(),
       },
@@ -222,7 +228,7 @@ class FloatingArrowPointing extends StateNode {
         },
       },
     ])
-    this.editor.select(this.arrowId)
+    startEditingAnnotationArrowLabel(this.editor, this.arrowId)
     this.parent.transition('idle')
   }
 
@@ -230,6 +236,45 @@ class FloatingArrowPointing extends StateNode {
     if (this.arrowId) this.editor.bailToMark(this.markId)
     this.parent.transition('idle')
   }
+}
+
+function getAnnotationArrowColor(editor: Editor) {
+  const color = editor.getStyleForNextShape(DefaultColorStyle)
+  return color === DefaultColorStyle.defaultValue ? FLOATING_ARROW_DEFAULT_COLOR : color
+}
+
+function startEditingAnnotationArrowLabel(editor: Editor, arrowId: TLShapeId) {
+  const shape = editor.getShape(arrowId)
+  if (!shape || !editor.canEditShape(shape)) {
+    editor.select(arrowId)
+    return
+  }
+
+  editor.select(arrowId)
+  startEditingShapeWithRichText(editor, arrowId, { selectAll: true })
+  pinAnnotationArrowLabelPosition(editor, arrowId)
+}
+
+function pinAnnotationArrowLabelPosition(editor: Editor, arrowId: TLShapeId, attempt = 0) {
+  editor.timers.setTimeout(() => {
+    const shape = editor.getShape(arrowId)
+    if (!shape || shape.type !== 'arrow' || shape.meta?.[FLOATING_ARROW_META_KEY] !== true) return
+    if ((shape.props as { labelPosition?: number }).labelPosition !== FLOATING_ARROW_LABEL_POSITION) {
+      editor.updateShapes([
+        {
+          id: arrowId,
+          type: 'arrow',
+          props: {
+            labelPosition: FLOATING_ARROW_LABEL_POSITION,
+          },
+        },
+      ])
+    }
+
+    if (attempt < 2 && editor.getEditingShapeId() === arrowId) {
+      pinAnnotationArrowLabelPosition(editor, arrowId, attempt + 1)
+    }
+  }, 16)
 }
 
 function getFloatingArrowBend(dx: number, dy: number, scale: number) {
@@ -362,7 +407,7 @@ export default function App() {
       if (!isRestoringCanvasRef.current) {
         normalizeImportedMediaShapes(editor, Object.values(changes.added), restoredShapeIdsRef.current)
         normalizeLegacyDefaultArrowBends(editor, Object.values(changes.added))
-        detachArrowBindings(editor, Object.values(changes.added))
+        syncAnnotationArrowStyles(editor, Object.values(changes.updated).map(([, next]) => next))
       }
       scheduleCanvasDocumentSave(editor)
     })
@@ -389,7 +434,6 @@ export default function App() {
       }
       if (document.camera) editor.setCamera(document.camera, { immediate: true })
       normalizeLegacyDefaultArrowBends(editor)
-      detachArrowBindings(editor)
       await waitForRestoreSideEffects(editor)
       editor.selectNone()
       setFrameAction(getSelectedFrameAction(editor))
@@ -667,11 +711,17 @@ export default function App() {
     const childId = createShapeId()
     const arrowId = createShapeId()
     const outputSize = { w: anchor.bounds.w, h: anchor.bounds.h }
-    const placement = createVersionPlacement(context.bounds, outputSize, shapes.map(getShapeBounds))
+    const placement = createVersionPlacement(anchor.bounds, outputSize, shapes.map(getShapeBounds))
     const parentShapeId = anchor.shapeId as TLShapeId
     const versionId = `version:codex-${Date.now()}`
-    const arrowStart = placement.lineageArrow.start
-    const arrowEnd = placement.lineageArrow.end
+    const arrowStart = {
+      x: anchor.bounds.x + anchor.bounds.w + 16,
+      y: anchor.bounds.y + anchor.bounds.h / 2,
+    }
+    const arrowEnd = {
+      x: placement.childBounds.x - 16,
+      y: placement.childBounds.y + placement.childBounds.h / 2,
+    }
 
     const generated = createNativeGeneratedMediaRecords({
       command,
@@ -703,6 +753,30 @@ export default function App() {
             arrowheadEnd: 'arrow',
             richText: toRichText(''),
             labelPosition: 0.5,
+          },
+        },
+      ])
+      editor.createBindings([
+        {
+          type: 'arrow',
+          fromId: arrowId,
+          toId: parentShapeId,
+          props: {
+            terminal: 'start',
+            normalizedAnchor: { x: 1, y: 0.5 },
+            isExact: false,
+            isPrecise: true,
+          },
+        },
+        {
+          type: 'arrow',
+          fromId: arrowId,
+          toId: childId,
+          props: {
+            terminal: 'end',
+            normalizedAnchor: { x: 0, y: 0.5 },
+            isExact: false,
+            isPrecise: true,
           },
         },
       ])
@@ -771,6 +845,30 @@ export default function App() {
             arrowheadEnd: 'arrow',
             richText: toRichText(''),
             labelPosition: 0.5,
+          },
+        },
+      ])
+      editor.createBindings([
+        {
+          type: 'arrow',
+          fromId: arrowId,
+          toId: source.id,
+          props: {
+            terminal: 'start',
+            normalizedAnchor: { x: sourceIsLeft ? 1 : 0, y: 0.5 },
+            isExact: false,
+            isPrecise: true,
+          },
+        },
+        {
+          type: 'arrow',
+          fromId: arrowId,
+          toId: target.id,
+          props: {
+            terminal: 'end',
+            normalizedAnchor: { x: sourceIsLeft ? 0 : 1, y: 0.5 },
+            isExact: false,
+            isPrecise: true,
           },
         },
       ])
@@ -1191,19 +1289,6 @@ function focusImportedMedia(editor: Editor) {
   })
 }
 
-function detachArrowBindings(editor: Editor, records: unknown[] = editor.store.allRecords()) {
-  const bindingIds = records
-    .filter((record): record is { id: string; typeName: string; type: string } => {
-      if (!record || typeof record !== 'object') return false
-      const candidate = record as { typeName?: string; type?: string }
-      return candidate.typeName === 'binding' && candidate.type === 'arrow'
-    })
-    .map((binding) => binding.id)
-
-  if (bindingIds.length === 0) return
-  editor.run(() => editor.deleteBindings(bindingIds as never[], { isolateShapes: true }), { history: 'ignore' })
-}
-
 function normalizeLegacyDefaultArrowBends(editor: Editor, records: unknown[] = editor.store.allRecords()) {
   const updates: TLShapePartial[] = []
   for (const record of records) {
@@ -1217,6 +1302,30 @@ function normalizeLegacyDefaultArrowBends(editor: Editor, records: unknown[] = e
       props: {
         bend: Math.sign(props.bend ?? 1) * DEFAULT_ARROW_BEND,
       },
+    })
+  }
+
+  if (updates.length === 0) return
+  editor.run(() => editor.updateShapes(updates), { history: 'ignore' })
+}
+
+function syncAnnotationArrowStyles(editor: Editor, records: unknown[] = editor.store.allRecords()) {
+  const updates: TLShapePartial[] = []
+  for (const record of records) {
+    const shape = record as TLArrowShape
+    if (!shape || shape.typeName !== 'shape' || shape.type !== 'arrow') continue
+    if (shape.meta?.[FLOATING_ARROW_META_KEY] !== true) continue
+
+    const props = shape.props
+    const nextProps: Partial<TLArrowShape['props']> = {}
+    if (props.color && props.labelColor !== props.color) nextProps.labelColor = props.color
+    if (props.labelPosition !== FLOATING_ARROW_LABEL_POSITION) nextProps.labelPosition = FLOATING_ARROW_LABEL_POSITION
+    if (Object.keys(nextProps).length === 0) continue
+
+    updates.push({
+      id: shape.id,
+      type: 'arrow',
+      props: nextProps,
     })
   }
 
