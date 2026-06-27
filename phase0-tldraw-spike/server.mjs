@@ -37,6 +37,7 @@ const canvasManifestPath = join(canvasRoot, 'manifest.json')
 const canvasViewStatePath = join(canvasRoot, 'view-state.json')
 const operationsLogPath = join(logsRoot, 'operations.jsonl')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
+const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
 
 await loadLocalEnv([join(workspaceRoot, '.env.local'), join(root, '.env.local'), join(workspaceRoot, '.env')])
 
