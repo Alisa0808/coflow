@@ -1,7 +1,11 @@
-import { readFile } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
+import { promisify } from 'node:util'
 
 const DEFAULT_BASE_URL = 'https://api.atlascloud.ai/api/v1'
+const execFileAsync = promisify(execFile)
 
 export async function runAtlasProvider(payload, options = {}) {
   const env = options.env ?? process.env
@@ -113,7 +117,11 @@ function buildAtlasGenerationPayload(payload, { outputType, prompt, uploadedRefe
   }
 
   if (hasReference) {
-    request.image_url = uploadedReferences[0].download_url
+    if (outputType === 'image') {
+      request.image = uploadedReferences[0].download_url
+    } else {
+      request.image_url = uploadedReferences[0].download_url
+    }
   }
 
   return request
@@ -143,31 +151,80 @@ async function uploadReferences(references, { apiKey, baseUrl }) {
       continue
     }
 
-    const fileBuffer = await readFile(localPath)
-    const fileName = basename(localPath)
+    const uploadFile = await prepareReferenceUploadFile(localPath)
     const formData = new FormData()
-    formData.append('file', new Blob([fileBuffer]), fileName)
-    const response = await fetch(`${baseUrl}/model/uploadMedia`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: formData,
-    })
-    const text = await response.text()
-    const body = parseMaybeJson(text)
-    if (!response.ok || body?.code >= 400) {
-      throw new Error(`Atlas upload failed: ${response.status} ${text}`)
+    formData.append('file', new Blob([uploadFile.buffer], { type: uploadFile.mimeType }), uploadFile.fileName)
+    try {
+      const response = await fetch(`${baseUrl}/model/uploadMedia`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: formData,
+      })
+      const text = await response.text()
+      const body = parseMaybeJson(text)
+      if (!response.ok || body?.code >= 400) {
+        throw new Error(`Atlas upload failed: ${response.status} ${text}`)
+      }
+      uploaded.push({
+        ...reference,
+        uploadResponse: body,
+        download_url: body?.data?.download_url,
+        filename: body?.data?.filename,
+        size: body?.data?.size,
+        normalizedReference: uploadFile.normalized,
+      })
+    } finally {
+      await uploadFile.cleanup?.()
     }
-    uploaded.push({
-      ...reference,
-      uploadResponse: body,
-      download_url: body?.data?.download_url,
-      filename: body?.data?.filename,
-      size: body?.data?.size,
-    })
   }
   return uploaded
+}
+
+async function prepareReferenceUploadFile(localPath) {
+  const originalBuffer = await readFile(localPath)
+  if (!isAvifBuffer(originalBuffer)) {
+    return {
+      buffer: originalBuffer,
+      fileName: basename(localPath),
+      mimeType: mimeTypeFromFileName(localPath),
+      normalized: false,
+    }
+  }
+
+  const tempRoot = await mkdtemp(join(tmpdir(), 'atlas-reference-'))
+  const normalizedPath = join(tempRoot, `${basename(localPath).replace(/[^a-zA-Z0-9_-]+/g, '-')}.png`)
+  try {
+    await execFileAsync('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', localPath, normalizedPath])
+    return {
+      buffer: await readFile(normalizedPath),
+      fileName: `${basename(localPath).replace(/[^a-zA-Z0-9_-]+/g, '-')}.png`,
+      mimeType: 'image/png',
+      normalized: 'avif-to-png',
+      cleanup: async () => {
+        await rm(tempRoot, { recursive: true, force: true })
+      },
+    }
+  } catch (error) {
+    await rm(tempRoot, { recursive: true, force: true })
+    throw new Error(`Atlas reference normalization failed for AVIF input: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function isAvifBuffer(buffer) {
+  return buffer.subarray(4, 12).toString('ascii') === 'ftypavif' || buffer.subarray(4, 12).toString('ascii') === 'ftypavis'
+}
+
+function mimeTypeFromFileName(fileName) {
+  if (/\\.png$/i.test(fileName)) return 'image/png'
+  if (/\\.jpe?g$/i.test(fileName)) return 'image/jpeg'
+  if (/\\.webp$/i.test(fileName)) return 'image/webp'
+  if (/\\.gif$/i.test(fileName)) return 'image/gif'
+  if (/\\.avif(\\.bin)?$/i.test(fileName)) return 'image/avif'
+  if (/\\.mp4$/i.test(fileName)) return 'video/mp4'
+  if (/\\.webm$/i.test(fileName)) return 'video/webm'
+  return 'application/octet-stream'
 }
 
 async function pollPrediction(predictionId, { apiKey, baseUrl, attempts, intervalMs }) {

@@ -45,7 +45,8 @@ test('runAtlasProvider uploads local reference, submits image task, and polls ou
     if (String(url).endsWith('/model/generateImage')) {
       const body = JSON.parse(init.body)
       assert.equal(body.model, 'openai/gpt-image-2/edit')
-      assert.equal(body.image_url, 'https://atlas.example.test/uploaded/source.png')
+      assert.equal(body.image, 'https://atlas.example.test/uploaded/source.png')
+      assert.equal(body.image_url, undefined)
       assert.match(body.prompt, /Edit the provided source image/)
       assert.match(body.prompt, /Do not replace the image with a new unrelated product/)
       assert.match(body.prompt, /A clean product image/)
