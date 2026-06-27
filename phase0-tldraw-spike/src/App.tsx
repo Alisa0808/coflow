@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
-import { StateNode, Tldraw, createShapeId, toRichText, type Editor, type TLAsset, type TLAssetStore, type TLShape, type TLShapeId, type TLShapePartial } from 'tldraw'
+import {
+  AssetRecordType,
+  StateNode,
+  Tldraw,
+  createShapeId,
+  toRichText,
+  type Editor,
+  type TLAsset,
+  type TLAssetId,
+  type TLAssetStore,
+  type TLShape,
+  type TLShapeId,
+  type TLShapePartial,
+} from 'tldraw'
 import { buildBoundedFrameContextPromptPart } from './agentPromptParts'
 import {
   createVersionPlacement,
@@ -14,7 +27,7 @@ import {
   type CanvasShapeRecord,
   type FrameContext,
 } from './canvasContracts'
-import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil, type MediaImageShape } from './mediaShape'
+import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil } from './mediaShape'
 import {
   fetchPendingCommands,
   loadActiveSkillSession,
@@ -38,7 +51,7 @@ const MAX_ASSET_SIZE_BYTES = 2 * 1024 * 1024 * 1024
 const IMPORTED_MEDIA_INITIAL_DISPLAY_FIT = { w: 1280, h: 720 }
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 32 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024
-const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
+const CANVAS_CLIENT_VERSION = '2026-06-27-native-media-writeback-v1'
 const DEFAULT_ARROW_BEND = 20
 const FLOATING_ARROW_META_KEY = 'codexFloatingArrow'
 const FLOATING_ARROW_MIN_LENGTH = 8
@@ -641,32 +654,18 @@ export default function App() {
     const arrowStart = placement.lineageArrow.start
     const arrowEnd = placement.lineageArrow.end
 
+    const generated = createNativeGeneratedMediaRecords({
+      command,
+      childId,
+      bounds: placement.childBounds,
+      src,
+      versionId,
+    })
+
     editor.run(() => {
+      editor.createAssets([generated.asset])
       editor.createShapes([
-        {
-          id: childId,
-          type: MEDIA_IMAGE_SHAPE,
-          x: placement.childBounds.x,
-          y: placement.childBounds.y,
-          props: {
-            w: placement.childBounds.w,
-            h: placement.childBounds.h,
-            assetId: `asset:${childId}`,
-            versionId,
-            localPath: command.localPath ?? '',
-            src,
-            mediaType: command.mediaType ?? command.outputMediaType ?? 'image',
-            title: command.title ?? 'Codex generated version',
-            prompt: command.prompt ?? '',
-            provider: command.provider ?? 'codex',
-            model: command.model ?? '',
-            generationMode: command.generationMode ?? '',
-            requestId: command.id,
-            executionId: '',
-            status: command.status ?? 'succeeded',
-            skillName: command.skillName ?? 'codex-media-generation',
-          },
-        } satisfies Partial<MediaImageShape>,
+        generated.shape,
         {
           id: arrowId,
           type: 'arrow',
@@ -1006,18 +1005,82 @@ function getSelectedMediaInfo(editor: Editor): SelectedMediaInfo {
   if (!selectedMedia) return null
 
   const props = selectedMedia.props as Record<string, unknown>
+  const metadata = getMediaMetadata(editor, selectedMedia)
   return {
-    title: stringFromUnknown(props.title) ?? (selectedMedia.type === 'video' ? 'Video asset' : 'Image asset'),
-    prompt: stringFromUnknown(props.prompt),
-    provider: stringFromUnknown(props.provider),
-    model: stringFromUnknown(props.model),
-    generationMode: stringFromUnknown(props.generationMode),
-    status: stringFromUnknown(props.status),
-    skillName: stringFromUnknown(props.skillName),
-    localPath: stringFromUnknown(props.localPath) ?? stringFromUnknown(props.assetId),
-    requestId: stringFromUnknown(props.requestId),
-    executionId: stringFromUnknown(props.executionId),
+    title: stringFromUnknown(metadata.title) ?? stringFromUnknown(props.title) ?? (selectedMedia.type === 'video' ? 'Video asset' : 'Image asset'),
+    prompt: stringFromUnknown(metadata.prompt) ?? stringFromUnknown(props.prompt),
+    provider: stringFromUnknown(metadata.provider) ?? stringFromUnknown(props.provider),
+    model: stringFromUnknown(metadata.model) ?? stringFromUnknown(props.model),
+    generationMode: stringFromUnknown(metadata.generationMode) ?? stringFromUnknown(props.generationMode),
+    status: stringFromUnknown(metadata.status) ?? stringFromUnknown(props.status),
+    skillName: stringFromUnknown(metadata.skillName) ?? stringFromUnknown(props.skillName),
+    localPath: stringFromUnknown(metadata.localPath) ?? stringFromUnknown(props.localPath) ?? stringFromUnknown(props.assetId),
+    requestId: stringFromUnknown(metadata.requestId) ?? stringFromUnknown(props.requestId),
+    executionId: stringFromUnknown(metadata.executionId) ?? stringFromUnknown(props.executionId),
   }
+}
+
+function createNativeGeneratedMediaRecords(input: {
+  command: CanvasCommand
+  childId: TLShapeId
+  bounds: Bounds
+  src: string
+  versionId: string
+}): { asset: TLAsset; shape: TLShapePartial } {
+  const { command, childId, bounds, src, versionId } = input
+  const mediaType = getCommandMediaType(command)
+  const assetId = AssetRecordType.createId()
+  const metadata = compactRecord({
+    versionId,
+    localPath: command.localPath,
+    absolutePath: command.absolutePath,
+    src,
+    mediaType,
+    title: command.title ?? (mediaType === 'video' ? 'Codex generated video' : 'Codex generated image'),
+    prompt: command.prompt,
+    provider: command.provider ?? 'codex',
+    model: command.model,
+    generationMode: command.generationMode,
+    requestId: command.id,
+    status: command.status ?? 'succeeded',
+    skillName: command.skillName ?? (mediaType === 'video' ? 'codex-media-canvas-video' : 'codex-media-canvas-image'),
+  })
+  const name = getFileNameFromPath(command.localPath ?? command.absolutePath ?? src) ?? metadata.title
+
+  const asset = {
+    id: assetId,
+    typeName: 'asset',
+    type: mediaType,
+    props: {
+      name,
+      src,
+      w: bounds.w,
+      h: bounds.h,
+      mimeType: getMimeTypeForMedia(mediaType, command.localPath ?? command.absolutePath ?? src),
+      isAnimated: mediaType === 'video',
+    },
+    meta: {
+      codexMediaCanvas: metadata,
+    },
+  } as TLAsset
+
+  const shape = {
+    id: childId,
+    type: mediaType,
+    x: bounds.x,
+    y: bounds.y,
+    opacity: 1,
+    props: {
+      assetId,
+      w: bounds.w,
+      h: bounds.h,
+    },
+    meta: {
+      codexMediaCanvas: metadata,
+    },
+  } as TLShapePartial
+
+  return { asset, shape }
 }
 
 function normalizeImportedMediaShapes(editor: Editor, records: unknown[], ignoredShapeIds = new Set<string>()) {
@@ -1228,6 +1291,55 @@ function srcFromLocalPath(localPath?: string) {
   if (localPath.startsWith('/asset-store/')) return localPath
   if (localPath.startsWith('.codex-media-canvas/')) return `/asset-store/${localPath.slice('.codex-media-canvas/'.length)}`
   return undefined
+}
+
+function getCommandMediaType(command: CanvasCommand): 'image' | 'video' {
+  if (command.mediaType === 'video' || command.outputMediaType === 'video') return 'video'
+  if (looksLikeVideoPath(command.localPath) || looksLikeVideoPath(command.absolutePath) || looksLikeVideoPath(command.src)) return 'video'
+  return 'image'
+}
+
+function getMimeTypeForMedia(mediaType: 'image' | 'video', path?: string) {
+  if (mediaType === 'video') {
+    if (/\.webm(\?|#|$)/i.test(path ?? '')) return 'video/webm'
+    if (/\.mov(\?|#|$)/i.test(path ?? '')) return 'video/mp4'
+    return 'video/mp4'
+  }
+  if (/\.jpe?g(\?|#|$)/i.test(path ?? '')) return 'image/jpeg'
+  if (/\.webp(\?|#|$)/i.test(path ?? '')) return 'image/webp'
+  if (/\.gif(\?|#|$)/i.test(path ?? '')) return 'image/gif'
+  return 'image/png'
+}
+
+function getFileNameFromPath(path?: string) {
+  if (!path) return undefined
+  const cleanPath = path.split(/[?#]/)[0]
+  const fileName = cleanPath.split('/').filter(Boolean).at(-1)
+  return fileName && fileName.length > 0 ? fileName : undefined
+}
+
+function compactRecord(input: Record<string, unknown>) {
+  const output: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== null && value !== '') output[key] = value
+  }
+  return output
+}
+
+function getMediaMetadata(editor: Editor, shape: TLShape) {
+  const props = shape.props as Record<string, unknown>
+  const assetId = stringFromUnknown(props.assetId)
+  const asset = assetId ? (editor.getAsset(assetId as TLAssetId) as TLAsset | undefined) : undefined
+  const assetMeta = (asset?.meta ?? {}) as Record<string, unknown>
+  const shapeMeta = (shape.meta ?? {}) as Record<string, unknown>
+  return {
+    ...recordFromUnknown(assetMeta.codexMediaCanvas),
+    ...recordFromUnknown(shapeMeta.codexMediaCanvas),
+  }
+}
+
+function recordFromUnknown(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
 function findContextFrame(editor: Editor, shapes: CanvasShapeRecord[]) {

@@ -14,7 +14,7 @@ const storeRoot = join(workspaceRoot, '.codex-media-canvas')
 const metadataRoot = join(workspaceRoot, '.codex-media-canvas', 'metadata')
 const commandsRoot = join(workspaceRoot, '.codex-media-canvas', 'commands')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
-const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
+const CANVAS_CLIENT_VERSION = '2026-06-27-native-media-writeback-v1'
 
 const tools = [
   {
