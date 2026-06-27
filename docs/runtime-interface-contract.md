@@ -41,6 +41,7 @@ Expected layout:
   logs/
     operations.jsonl
   metadata/
+    active-skill-session.json
     latest-agent-prompt.json
     latest-frame-context.json
     latest-codex-frame-request.json
@@ -62,6 +63,7 @@ Rules:
 - `frame-inputs/*.json` are hidden agent source-of-truth artifacts created by `Send to Codex`.
 - `frame-screenshots/*.png` are auxiliary visual artifacts for Codex/user inspection.
 - `metadata/latest-*.json` files are snapshots for inspection and UI/debug convenience.
+- `metadata/active-skill-session.json` stores the current Codex-controlled Skill session for the canvas shortcut UI.
 - `executions/*.json` and `logs/operations.jsonl` are the durable history.
 - `.codex-media-canvas/assets/**` is the durable local media store.
 - Provider remote URLs are temporary and must be materialized into `.codex-media-canvas/assets/**` before being considered canvas outputs.
@@ -86,14 +88,16 @@ Rules:
 
 ## Codex bridge and generation flow
 
-Current Phase 0.5 implementation note:
+Current Phase 0.6 implementation note:
 
 - The default frame button is `Send to Codex`.
 - `Send to Codex` extracts bounded frame context, saves a hidden Frame Input JSON, saves a frame screenshot artifact, and publishes an awaiting-user-instruction frame request.
 - It does not call a provider by default.
 - Codex / an active Codex agent skill is responsible for choosing image/video/3D skill, provider, model, mode, and parameters.
 - Browser-side provider execution may exist as a debug spike path only; it is not the canonical product path.
-- `Generate version` may return later only when an active skill / auto-run mode is already established.
+- `Generate version` appears only when an active skill / auto-run mode is already established.
+- Phase 0.6 includes a local `codex-simulated` active skill executor to prove the loop without spending provider credits.
+- The simulated executor is not the product generation backend; real GPT Image 2 / Seedance 2.0 / Atlas-backed execution belongs to Codex Skills/provider adapters.
 
 ```text
 User clicks Send to Codex
@@ -125,6 +129,9 @@ canvas.insert_media
 canvas.create_version
 canvas.link_versions
 canvas.agent_prompt
+canvas.get_active_skill_session
+canvas.activate_skill_session
+canvas.clear_active_skill_session
 ```
 
 Planned before Phase 1:
@@ -132,6 +139,51 @@ Planned before Phase 1:
 ```text
 browser-generated fresh selected-region PNG capture
 ```
+
+## Active Skill Session flow
+
+The canvas can enter a lightweight session mode after Codex activates a media Skill:
+
+```text
+Codex / MCP calls canvas.activate_skill_session
+  -> server writes metadata/active-skill-session.json
+  -> browser polls /api/active-skill/session
+  -> canvas shows a minimal active-skill pill
+  -> selected frame button becomes Generate version
+```
+
+Session payload:
+
+```json
+{
+  "status": "active",
+  "skillName": "codex-image-edit",
+  "displayName": "Codex Image Edit",
+  "outputMediaType": "image",
+  "provider": "codex-simulated",
+  "autoRun": true
+}
+```
+
+When the user clicks `Generate version`:
+
+```text
+browser extracts bounded frame context
+browser saves screenshot and Frame Input
+browser marks the request ready_to_execute
+browser POST /api/active-skill/run-frame
+server/local active skill queues canvas.create_version
+browser polls /api/commands/pending
+browser places output media and lineage arrow
+```
+
+Rules:
+
+- `Send to Codex` remains the default when there is no active Skill.
+- `Generate version` must not appear as a generic provider button.
+- Active Skill mode is sticky only as session metadata; it is not a whiteboard Skill marketplace.
+- Real provider selection stays inside Codex Skill logic.
+- Phase 0.6 `codex-simulated` output is only a deterministic loop test.
 
 ## Upload flow
 

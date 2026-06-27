@@ -31,6 +31,7 @@ const latestFrameInputPath = join(metadataRoot, 'latest-frame-input.json')
 const latestFrameScreenshotPath = join(metadataRoot, 'latest-frame-screenshot.json')
 const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
 const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
+const activeSkillSessionPath = join(metadataRoot, 'active-skill-session.json')
 const canvasDocumentPath = join(canvasRoot, 'document.json')
 const canvasManifestPath = join(canvasRoot, 'manifest.json')
 const canvasViewStatePath = join(canvasRoot, 'view-state.json')
@@ -186,6 +187,30 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/api/agent/prompt/latest' && request.method === 'GET') {
       return sendJson(response, await readJsonFile(latestAgentPromptPath, null))
+    }
+
+    if (url.pathname === '/api/active-skill/session' && request.method === 'GET') {
+      return sendJson(response, { ok: true, session: await readActiveSkillSession() })
+    }
+
+    if (url.pathname === '/api/active-skill/session' && (request.method === 'PUT' || request.method === 'POST')) {
+      const body = await readJsonBody(request)
+      const session = await writeActiveSkillSession(body)
+      await appendOperation({ type: 'active_skill.session_started', session })
+      return sendJson(response, { ok: true, session })
+    }
+
+    if (url.pathname === '/api/active-skill/session' && request.method === 'DELETE') {
+      await clearActiveSkillSession()
+      await appendOperation({ type: 'active_skill.session_cleared' })
+      return sendJson(response, { ok: true, session: null })
+    }
+
+    if (url.pathname === '/api/active-skill/run-frame' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      const result = await runActiveSkillFrame(body)
+      await appendOperation({ type: 'active_skill.frame_executed', result })
+      return sendJson(response, { ok: true, ...result })
     }
 
     if (url.pathname === '/api/codex/frame-requests' && request.method === 'POST') {
@@ -609,6 +634,143 @@ function createCommand(input) {
     skillName: input.skillName,
     minClientVersion: input.minClientVersion,
   }
+}
+
+async function readActiveSkillSession() {
+  return readJsonFile(activeSkillSessionPath, null)
+}
+
+async function writeActiveSkillSession(input = {}) {
+  const now = new Date().toISOString()
+  const previous = await readActiveSkillSession()
+  const skillName = typeof input.skillName === 'string' && input.skillName ? input.skillName : 'codex-image-edit'
+  const displayName = typeof input.displayName === 'string' && input.displayName ? input.displayName : 'Codex Image Edit'
+  const outputMediaType = input.outputMediaType === 'video' ? 'video' : 'image'
+  const provider = typeof input.provider === 'string' && input.provider ? input.provider : 'codex-simulated'
+  const session = {
+    id: previous?.id || `active-skill:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    status: 'active',
+    skillName,
+    displayName,
+    outputMediaType,
+    provider,
+    autoRun: input.autoRun !== false,
+    startedAt: previous?.startedAt || now,
+    updatedAt: now,
+  }
+  await writeJson(activeSkillSessionPath, session)
+  return session
+}
+
+async function clearActiveSkillSession() {
+  await rm(activeSkillSessionPath, { force: true })
+}
+
+async function runActiveSkillFrame(input = {}) {
+  const session = await readActiveSkillSession()
+  if (!session?.status) throw new Error('No active media Skill session. Activate a Skill from Codex first.')
+
+  const latestFrameInputMeta = await readJsonFile(latestFrameInputPath, null)
+  const latestFrameRequest = await readJsonFile(latestCodexFrameRequestPath, null)
+  const frameInput = latestFrameInputMeta?.frameInput?.absolutePath
+    ? await readJsonFile(latestFrameInputMeta.frameInput.absolutePath, null)
+    : null
+  const frameId = input.frameId || frameInput?.frameId || latestFrameRequest?.request?.frameId
+  if (!frameId) throw new Error('No frameId found. Click Send to Codex or Generate version on a frame first.')
+
+  if (input.frameRequestId && frameInput?.requestId && input.frameRequestId !== frameInput.requestId) {
+    throw new Error(`Latest Frame Input belongs to ${frameInput.requestId}, not ${input.frameRequestId}.`)
+  }
+
+  const command = await createSimulatedSkillVersionCommand(session, frameInput, frameId)
+  await appendCommand(command)
+  return {
+    session,
+    command,
+    frameInput: latestFrameInputMeta?.frameInput,
+  }
+}
+
+async function createSimulatedSkillVersionCommand(session, frameInput, frameId) {
+  const prompt = extractFramePromptText(frameInput)
+  const color = detectPromptColor(prompt)
+  const fileName = `skill-output-${Date.now()}.svg`
+  const localPath = `.codex-media-canvas/assets/images/${fileName}`
+  const absolutePath = join(assetsRoot, 'images', fileName)
+  const svg = simulatedSkillOutputSvg({ color, prompt, skillName: session.displayName })
+  await mkdir(join(assetsRoot, 'images'), { recursive: true })
+  await writeFile(absolutePath, svg)
+
+  return createCommand({
+    source: 'active-skill-session',
+    type: 'canvas.create_version',
+    frameId,
+    prompt,
+    provider: session.provider,
+    mediaType: 'image',
+    outputMediaType: session.outputMediaType,
+    localPath,
+    absolutePath,
+    title: `${session.displayName} version`,
+    model: `${session.skillName}:phase-0.6-simulated`,
+    status: 'succeeded',
+    skillName: session.skillName,
+    minClientVersion: CANVAS_CLIENT_VERSION,
+  })
+}
+
+function extractFramePromptText(frameInput) {
+  const texts = frameInput?.summary?.annotationTexts
+  if (Array.isArray(texts) && texts.length > 0) return texts.filter(Boolean).join('\n')
+  const promptPartTexts = frameInput?.promptPart?.annotations
+  if (Array.isArray(promptPartTexts) && promptPartTexts.length > 0) {
+    return promptPartTexts
+      .map((annotation) => annotation?.text)
+      .filter(Boolean)
+      .join('\n')
+  }
+  return `Generate a new version from frame "${frameInput?.summary?.frameName || frameInput?.frameId || 'Untitled frame'}".`
+}
+
+function detectPromptColor(prompt) {
+  const lower = String(prompt || '').toLowerCase()
+  if (lower.includes('pink') || lower.includes('粉')) return '#f472b6'
+  if (lower.includes('green') || lower.includes('绿')) return '#34d399'
+  if (lower.includes('blue') || lower.includes('蓝')) return '#60a5fa'
+  if (lower.includes('yellow') || lower.includes('黄')) return '#facc15'
+  if (lower.includes('orange') || lower.includes('橙')) return '#fb923c'
+  if (lower.includes('black') || lower.includes('黑')) return '#111827'
+  if (lower.includes('premium') || lower.includes('高级')) return '#c084fc'
+  return '#2563eb'
+}
+
+function simulatedSkillOutputSvg({ color }) {
+  const accent = escapeXml(color)
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="g1" cx="36%" cy="28%" r="72%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="42%" stop-color="${accent}" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </radialGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.84"/>
+      <stop offset="100%" stop-color="${accent}" stop-opacity="0.55"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="56" fill="url(#g1)"/>
+  <circle cx="770" cy="228" r="146" fill="${accent}" opacity="0.26" filter="url(#soft)"/>
+  <circle cx="276" cy="774" r="188" fill="#fff" opacity="0.16" filter="url(#soft)"/>
+  <path d="M292 676c108-228 310-346 514-372-34 234-174 416-420 510-62 24-126-76-94-138Z" fill="url(#g2)" opacity="0.92"/>
+  <path d="M244 330c146-86 332-98 512-38-134 22-316 92-442 222-44-38-70-98-70-184Z" fill="#fff" opacity="0.34"/>
+  <g fill="#fff" opacity="0.66">
+    <circle cx="210" cy="218" r="9"/><circle cx="284" cy="172" r="5"/><circle cx="836" cy="682" r="7"/>
+    <circle cx="722" cy="816" r="4"/><circle cx="150" cy="724" r="5"/><circle cx="612" cy="164" r="6"/>
+  </g>
+</svg>`
 }
 
 function normalizeSelectionSnapshot(input) {

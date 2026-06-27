@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -9,7 +9,9 @@ const latestFrameContextPath = join(workspaceRoot, '.codex-media-canvas', 'metad
 const latestCodexFrameRequestPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-codex-frame-request.json')
 const latestFrameInputPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-frame-input.json')
 const latestFrameScreenshotPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'latest-frame-screenshot.json')
+const activeSkillSessionPath = join(workspaceRoot, '.codex-media-canvas', 'metadata', 'active-skill-session.json')
 const storeRoot = join(workspaceRoot, '.codex-media-canvas')
+const metadataRoot = join(workspaceRoot, '.codex-media-canvas', 'metadata')
 const commandsRoot = join(workspaceRoot, '.codex-media-canvas', 'commands')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
 const CANVAS_CLIENT_VERSION = '2026-06-26-video-writeback-v2'
@@ -122,6 +124,58 @@ const tools = [
           description: 'An absolute local filesystem path inside the workspace canvas store.',
         },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'canvas.get_active_skill_session',
+    description:
+      'Read the current active Codex media Skill session. When present, the canvas frame action can generate directly instead of only sending context.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'canvas.activate_skill_session',
+    description:
+      'Activate a Codex-controlled media Skill session for the canvas. This makes selected frames show Generate version while keeping provider/model execution owned by Codex/Skills.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        skillName: {
+          type: 'string',
+          description: 'Stable skill id, e.g. codex-image-edit, codex-video-generation, seedance-video.',
+        },
+        displayName: {
+          type: 'string',
+          description: 'Short user-facing skill name shown in the canvas.',
+        },
+        outputMediaType: {
+          type: 'string',
+          enum: ['image', 'video'],
+          description: 'Default output media type for this skill session.',
+        },
+        provider: {
+          type: 'string',
+          description: 'Provider/runtime label, e.g. codex-simulated, openai, atlas, seedance.',
+        },
+        autoRun: {
+          type: 'boolean',
+          description: 'When true, the frame action becomes Generate version. Defaults to true.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'canvas.clear_active_skill_session',
+    description:
+      'Clear the active media Skill session. Selected frames return to Send to Codex context mode.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
       additionalProperties: false,
     },
   },
@@ -412,6 +466,42 @@ async function handleLine(line) {
       })
     }
 
+    if (toolName === 'canvas.get_active_skill_session') {
+      const payload = await readActiveSkillSession()
+      return respond(id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ ok: true, session: payload }, null, 2),
+          },
+        ],
+      })
+    }
+
+    if (toolName === 'canvas.activate_skill_session') {
+      const payload = await writeActiveSkillSession(params?.arguments ?? {})
+      return respond(id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ ok: true, session: payload }, null, 2),
+          },
+        ],
+      })
+    }
+
+    if (toolName === 'canvas.clear_active_skill_session') {
+      await clearActiveSkillSession()
+      return respond(id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ ok: true, session: null }, null, 2),
+          },
+        ],
+      })
+    }
+
     if (toolName === 'canvas.create_version' || toolName === 'canvas.agent_prompt' || toolName === 'canvas.insert_media' || toolName === 'canvas.link_versions') {
       const payload = await enqueueCanvasCommand(params?.arguments ?? {}, toolName)
       return respond(id, {
@@ -589,6 +679,41 @@ async function readCanvasAsset(args) {
       error: error instanceof Error ? error.message : String(error),
     }
   }
+}
+
+async function readActiveSkillSession() {
+  try {
+    return JSON.parse(await readFile(activeSkillSessionPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+async function writeActiveSkillSession(input = {}) {
+  const now = new Date().toISOString()
+  const previous = await readActiveSkillSession()
+  const skillName = typeof input.skillName === 'string' && input.skillName ? input.skillName : 'codex-image-edit'
+  const displayName = typeof input.displayName === 'string' && input.displayName ? input.displayName : 'Codex Image Edit'
+  const outputMediaType = input.outputMediaType === 'video' ? 'video' : 'image'
+  const provider = typeof input.provider === 'string' && input.provider ? input.provider : 'codex-simulated'
+  const session = {
+    id: previous?.id || `active-skill:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    status: 'active',
+    skillName,
+    displayName,
+    outputMediaType,
+    provider,
+    autoRun: input.autoRun !== false,
+    startedAt: previous?.startedAt || now,
+    updatedAt: now,
+  }
+  await mkdir(metadataRoot, { recursive: true })
+  await writeFile(activeSkillSessionPath, `${JSON.stringify(session, null, 2)}\n`)
+  return session
+}
+
+async function clearActiveSkillSession() {
+  await rm(activeSkillSessionPath, { force: true })
 }
 
 function resolveReadableCanvasAssetPath(absolutePath, localPath) {

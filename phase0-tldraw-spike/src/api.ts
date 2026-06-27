@@ -9,7 +9,7 @@ export type CanvasCommand = {
   targetShapeId?: string
   linkType?: 'version' | 'reference' | 'derivative'
   prompt?: string
-  provider?: 'mock-provider' | 'atlas' | 'seedance' | 'kling'
+  provider?: 'codex-simulated' | 'mock-provider' | 'atlas' | 'openai' | 'seedance' | 'kling'
   outputMediaType?: 'image' | 'video'
   generationMode?: string
   mediaType?: 'image' | 'video'
@@ -22,6 +22,18 @@ export type CanvasCommand = {
   skillName?: string
   minClientVersion?: string
 }
+
+export type ActiveSkillSession = {
+  id: string
+  status: 'active'
+  skillName: string
+  displayName: string
+  outputMediaType: 'image' | 'video'
+  provider: NonNullable<CanvasCommand['provider']>
+  autoRun: boolean
+  startedAt: string
+  updatedAt: string
+} | null
 
 export type QueueAgentPromptInput = {
   frameId?: string
@@ -167,14 +179,14 @@ export async function publishSelectionSnapshot(selection: CanvasSelectionSnapsho
   })
 }
 
-export async function publishCodexFrameRequest(request: CodexFrameRequestInput) {
+export async function publishCodexFrameRequest(request: CodexFrameRequestInput): Promise<CodexFrameRequest> {
   const response = await fetch('/api/codex/frame-requests', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(request),
   })
   const payload = (await response.json()) as { ok: boolean; request?: CodexFrameRequest; error?: string }
-  if (!payload.ok) throw new Error(payload.error ?? 'Failed to publish Codex frame request.')
+  if (!payload.ok || !payload.request) throw new Error(payload.error ?? 'Failed to publish Codex frame request.')
   return payload.request
 }
 
@@ -220,6 +232,24 @@ export async function queueAgentPrompt(input: QueueAgentPromptInput): Promise<Ca
   })
   const payload = (await response.json()) as { ok: boolean; command?: CanvasCommand; error?: string }
   if (!payload.ok || !payload.command) throw new Error(payload.error ?? 'Failed to queue agent prompt.')
+  return payload.command
+}
+
+export async function loadActiveSkillSession(): Promise<ActiveSkillSession> {
+  const response = await fetch('/api/active-skill/session')
+  const payload = (await response.json()) as { ok: boolean; session?: ActiveSkillSession; error?: string }
+  if (!payload.ok) throw new Error(payload.error ?? 'Failed to load active skill session.')
+  return payload.session ?? null
+}
+
+export async function runActiveSkillFrame(input: { frameId: string; frameRequestId?: string }): Promise<CanvasCommand> {
+  const response = await fetch('/api/active-skill/run-frame', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  const payload = (await response.json()) as { ok: boolean; command?: CanvasCommand; error?: string }
+  if (!payload.ok || !payload.command) throw new Error(payload.error ?? 'Failed to run active skill for frame.')
   return payload.command
 }
 

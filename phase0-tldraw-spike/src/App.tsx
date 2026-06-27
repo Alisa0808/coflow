@@ -17,15 +17,19 @@ import {
 import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil, type MediaImageShape } from './mediaShape'
 import {
   fetchPendingCommands,
+  loadActiveSkillSession,
   loadCanvasDocument,
   materializeAsset,
   publishCodexFrameRequest,
   publishFrameContext,
   publishSelectionSnapshot,
   recordOperation,
+  runActiveSkillFrame,
   saveCanvasDocument,
   saveFrameScreenshot,
+  type ActiveSkillSession,
   type CanvasCommand,
+  type CodexFrameRequest,
   type FrameScreenshot,
 } from './api'
 
@@ -242,6 +246,7 @@ export default function App() {
   const lastPublishedSelectionRef = useRef('')
   const [status, setStatus] = useState('')
   const [frameAction, setFrameAction] = useState<FrameActionState>(null)
+  const [activeSkillSession, setActiveSkillSession] = useState<ActiveSkillSession>(null)
   const [selectedMediaInfo, setSelectedMediaInfo] = useState<SelectedMediaInfo>(null)
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>(null)
 
@@ -261,6 +266,15 @@ export default function App() {
 
   useEffect(() => {
     let stopped = false
+
+    async function pollActiveSkillSession() {
+      if (stopped) return
+      try {
+        setActiveSkillSession(await loadActiveSkillSession())
+      } catch {
+        // The local backend may still be starting; keep the canvas usable.
+      }
+    }
 
     async function pollWritebackCommands() {
       if (stopped) return
@@ -286,11 +300,16 @@ export default function App() {
     const interval = window.setInterval(() => {
       void pollWritebackCommands()
     }, 1000)
+    const activeSkillInterval = window.setInterval(() => {
+      void pollActiveSkillSession()
+    }, 1600)
     void pollWritebackCommands()
+    void pollActiveSkillSession()
 
     return () => {
       stopped = true
       window.clearInterval(interval)
+      window.clearInterval(activeSkillInterval)
       if (statusTimeoutRef.current !== null) window.clearTimeout(statusTimeoutRef.current)
       if (selectionPublishTimeoutRef.current !== null) window.clearTimeout(selectionPublishTimeoutRef.current)
       if (canvasSaveTimeoutRef.current !== null) window.clearTimeout(canvasSaveTimeoutRef.current)
@@ -444,30 +463,33 @@ export default function App() {
     }
   }
 
-  async function sendFrameToCodex(frameId: string) {
+  async function publishFrameForCodex(
+    frameId: string,
+    status: 'awaiting_user_instruction' | 'ready_to_execute',
+  ): Promise<{ request: CodexFrameRequest; context: FrameContext; screenshotResult: FrameScreenshotResult } | null> {
     const editor = editorRef.current
-    if (!editor) return
+    if (!editor) return null
     const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
     const frame = shapes.find((shape) => shape.id === frameId && shape.type === 'frame') ?? findContextFrame(editor, shapes)
     if (!frame) {
       showStatus('No frame found. Select a frame around the media and annotations first.', 5200)
-      return
+      return null
     }
 
     const context = await extractMaterializedFrameContext(editor, shapes, frame.id)
     if (!context.anchorMedia) {
       showStatus('Frame has no media anchor.', 5200)
-      return
+      return null
     }
 
     const frameScreenshot = await copyAndSaveFrameScreenshot(editor, shapes, frame.id, context.frameName)
 
     await publishFrameContext(context)
     const promptPart = buildBoundedFrameContextPromptPart(context, 'canvas-frame-action')
-    await publishCodexFrameRequest({
+    const request = await publishCodexFrameRequest({
       frameId: context.frameId,
       promptPart,
-      status: 'awaiting_user_instruction',
+      status,
       summary: {
         frameName: context.frameName,
         mediaCount: context.media.length,
@@ -477,23 +499,60 @@ export default function App() {
       },
       frameScreenshot: frameScreenshot.screenshot,
       defaultInstruction:
-        'Treat this as a pending Codex canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back on the board.',
+        status === 'ready_to_execute'
+          ? 'This frame belongs to an active Codex media Skill session. Use the structured Frame Input as source of truth, execute the active Skill, then call canvas.insert_media or canvas.create_version to place the result back on the board.'
+          : 'Treat this as a pending Codex canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back on the board.',
       recommendedUserPrompt:
-        'I have sent this frame to Codex. Please tell me what you want to create or edit from this frame, or say “generate a version from these annotations”.',
+        status === 'ready_to_execute'
+          ? 'Generate a version from the media and annotations inside this frame using the active Skill.'
+          : 'I have sent this frame to Codex. Please tell me what you want to create or edit from this frame, or say “generate a version from these annotations”.',
     })
     await recordOperation({
-      type: 'codex.frame_context_sent',
+      type: status === 'ready_to_execute' ? 'codex.frame_context_ready_to_execute' : 'codex.frame_context_sent',
       frameId: context.frameId,
       promptPart,
-      skillName: 'codex-media-generation',
+      skillName: activeSkillSession?.skillName ?? 'codex-media-generation',
       promptSource: 'canvas-frame-action',
     })
+    return { request, context, screenshotResult: frameScreenshot }
+  }
+
+  async function sendFrameToCodex(frameId: string) {
+    const published = await publishFrameForCodex(frameId, 'awaiting_user_instruction')
+    if (!published) return
+
     showStatus(
-      frameScreenshot.clipboardCopied
+      published.screenshotResult.clipboardCopied
         ? 'Sent frame to Codex. Screenshot copied — paste it into the Codex chat.'
         : 'Sent frame to Codex. Screenshot copy was blocked, but Codex can read the Frame Input.',
       6200,
     )
+  }
+
+  async function generateFrameVersion(frameId: string) {
+    if (!activeSkillSession?.autoRun) {
+      void sendFrameToCodex(frameId)
+      return
+    }
+
+    const published = await publishFrameForCodex(frameId, 'ready_to_execute')
+    if (!published) return
+
+    try {
+      await runActiveSkillFrame({
+        frameId: published.context.frameId,
+        frameRequestId: published.request.id,
+      })
+      showStatus(`Generating with ${activeSkillSession.displayName}. Keep this canvas open for writeback.`, 4200)
+    } catch (error) {
+      await recordOperation({
+        type: 'active_skill.run_failed',
+        frameId: published.context.frameId,
+        skillName: activeSkillSession.skillName,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      showStatus(error instanceof Error ? error.message : 'Active Skill run failed.', 6200)
+    }
   }
 
   async function copyAndSaveFrameScreenshot(
@@ -727,9 +786,27 @@ export default function App() {
           {status}
         </div>
       ) : null}
+      {activeSkillSession ? <ActiveSkillPill session={activeSkillSession} /> : null}
       {selectedMediaInfo ? <MediaInfoPanel info={selectedMediaInfo} /> : null}
       {uploadProgress ? <UploadProgress progress={uploadProgress} /> : null}
-      {frameAction ? <FrameCodexAction action={frameAction} onSend={sendFrameToCodex} /> : null}
+      {frameAction ? (
+        <FrameCodexAction
+          action={frameAction}
+          activeSkillSession={activeSkillSession}
+          onGenerate={generateFrameVersion}
+          onSend={sendFrameToCodex}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function ActiveSkillPill({ session }: { session: NonNullable<ActiveSkillSession> }) {
+  return (
+    <div className="active-skill-pill" aria-live="polite">
+      <span className="active-skill-pill__dot" aria-hidden="true" />
+      <span>{session.displayName}</span>
+      <em>{session.autoRun ? 'Generate mode' : 'Context mode'}</em>
     </div>
   )
 }
@@ -768,7 +845,23 @@ function MediaInfoPanel({ info }: { info: NonNullable<SelectedMediaInfo> }) {
   )
 }
 
-function FrameCodexAction({ action, onSend }: { action: NonNullable<FrameActionState>; onSend: (frameId: string) => void }) {
+function FrameCodexAction({
+  action,
+  activeSkillSession,
+  onGenerate,
+  onSend,
+}: {
+  action: NonNullable<FrameActionState>
+  activeSkillSession: ActiveSkillSession
+  onGenerate: (frameId: string) => void
+  onSend: (frameId: string) => void
+}) {
+  const isGenerateMode = Boolean(activeSkillSession?.autoRun)
+  const label = isGenerateMode ? 'Generate version' : 'Send to Codex'
+  const title = isGenerateMode
+    ? `Generate a new version from ${action.frameName} using ${activeSkillSession?.displayName}`
+    : `Send ${action.frameName} context to Codex`
+
   function keepPrimaryPointerOnButton(event: PointerEvent<HTMLButtonElement> | MouseEvent<HTMLButtonElement>) {
     if ('button' in event && event.button !== 0) return
     event.stopPropagation()
@@ -778,6 +871,7 @@ function FrameCodexAction({ action, onSend }: { action: NonNullable<FrameActionS
     <button
       type="button"
       className="frame-action-button"
+      data-mode={isGenerateMode ? 'generate' : 'send'}
       style={{ left: action.left, top: action.top }}
       onPointerDownCapture={keepPrimaryPointerOnButton}
       onPointerUpCapture={keepPrimaryPointerOnButton}
@@ -786,9 +880,10 @@ function FrameCodexAction({ action, onSend }: { action: NonNullable<FrameActionS
       onClick={(event) => {
         event.preventDefault()
         event.stopPropagation()
-        onSend(action.frameId)
+        if (isGenerateMode) onGenerate(action.frameId)
+        else onSend(action.frameId)
       }}
-      title={`Send ${action.frameName} context to Codex`}
+      title={title}
     >
       <span className="frame-action-button__icon" aria-hidden="true">
         <svg viewBox="0 0 16 16" focusable="false">
@@ -796,7 +891,7 @@ function FrameCodexAction({ action, onSend }: { action: NonNullable<FrameActionS
           <path d="M3.7 10.1 4.4 12l1.9.7-1.9.8-.7 1.8-.8-1.8-1.8-.8 1.8-.7.8-1.9Z" />
         </svg>
       </span>
-      <span>Send to Codex</span>
+      <span>{label}</span>
     </button>
   )
 }

@@ -710,6 +710,15 @@ Active skill: Product Marketing Set · Provider: Auto/Atlas · Configure in Code
 
 但不要提供完整 Skill 列表、表单和参数面板。
 
+Phase 0.6 的实现边界：
+
+- 用 `.codex-media-canvas/metadata/active-skill-session.json` 保存当前 active skill session；
+- Codex / MCP 可以激活或清除 session；
+- session 激活后，画布只显示一个轻量 active skill 状态，不显示 skill marketplace；
+- 选中 frame 后，按钮从 `Send to Codex` 切换为 `Generate version`；
+- 点击 `Generate version` 仍然会先生成 Frame Input，再触发 active skill，而不是让白板自己拼 provider payload；
+- 当前 `codex-simulated` 只用于本地闭环验证，真实 GPT image 2 / Seedance 2.0 / Atlas 执行属于后续 Codex Skill/provider 层。
+
 Session Mode 需要记录：
 
 - active agent skill；
@@ -1576,7 +1585,7 @@ interface CanvasAgentSkillManifest {
 | tldraw 是否适合作为画布引擎 | Phase 0 | 是否支持真实 media shape、frame context、原生标注、父子连线、license 可接受 |
 | frame 按钮如何通知 Codex | Phase 0/1 | 能否让 Codex 可靠读取指定 frame context；避免把 request queue 变成主交互 |
 | 生成默认参数策略 | Phase 1/2 | 定义 `GenerationDefaultsPolicy`：图片默认 GPT image 2、视频默认 Seedance 2.0；比例优先从 selected media / active frame 推断；分辨率、质量、视频时长、FPS 有统一可解释默认，并在执行前可由 Codex 告知用户 |
-| Canvas Session Mode 存在哪里 | Phase 1/2 | 重启/新对话后能否 resume；是否需要同时存在 canvas metadata 与 Codex context |
+| Canvas Session Mode 存在哪里 | Phase 0.6 / Phase 1 | Phase 0.6 先放 canvas metadata 证明闭环；Phase 1 再确认与 Codex conversation / plugin state 如何恢复 |
 | Product Marketing Set 等 Skill 形态 | Phase 2 | 是否能作为 Codex agent skill 插拔安装并驱动画布，而不是白板按钮 |
 | Atlas 第一个真实 provider 链路 | Phase 3 | image edit / image-to-video 哪条链路最能证明 Atlas 价值 |
 | 视频编辑承诺边界 | Phase 2/3 | 当前 Atlas/provider 是否支持 native video edit；否则只承诺 keyframe-guided regeneration |
