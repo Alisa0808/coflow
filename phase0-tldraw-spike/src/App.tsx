@@ -337,7 +337,7 @@ export default function App() {
       const document = await loadCanvasDocument()
       if (!document?.snapshot) return
 
-      editor.store.loadStoreSnapshot(document.snapshot as never)
+      editor.store.loadStoreSnapshot(clearVolatileCanvasSnapshotState(document.snapshot) as never)
       if (document.currentPageId) {
         try {
           editor.setCurrentPage(document.currentPageId as never)
@@ -346,6 +346,7 @@ export default function App() {
         }
       }
       if (document.camera) editor.setCamera(document.camera, { immediate: true })
+      editor.selectNone()
       normalizeLegacyDefaultArrowBends(editor)
       detachArrowBindings(editor)
       showStatus('Restored local canvas.', 1800)
@@ -377,7 +378,7 @@ export default function App() {
         clientVersion: CANVAS_CLIENT_VERSION,
         currentPageId: editor.getCurrentPageId(),
         camera: editor.getCamera(),
-        snapshot: editor.store.getStoreSnapshot('all'),
+        snapshot: clearVolatileCanvasSnapshotState(editor.store.getStoreSnapshot('all')),
       })
     } catch (error) {
       await recordOperation({
@@ -734,6 +735,38 @@ function getSelectedFrameAction(editor: Editor): FrameActionState {
     frameName,
     left: Math.max(12, topLeft.x + 10),
     top: Math.max(64, topLeft.y - 36),
+  }
+}
+
+function clearVolatileCanvasSnapshotState(snapshot: unknown) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot
+  const snapshotRecord = snapshot as { store?: Record<string, unknown> }
+  if (!snapshotRecord.store || typeof snapshotRecord.store !== 'object') return snapshot
+
+  const store = Object.fromEntries(
+    Object.entries(snapshotRecord.store).map(([id, record]) => {
+      if (!record || typeof record !== 'object') return [id, record]
+      const typedRecord = record as { typeName?: string }
+      if (typedRecord.typeName !== 'instance_page_state') return [id, record]
+      return [
+        id,
+        {
+          ...typedRecord,
+          editingShapeId: null,
+          croppingShapeId: null,
+          selectedShapeIds: [],
+          hoveredShapeId: null,
+          erasingShapeIds: [],
+          hintingShapeIds: [],
+          focusedGroupId: null,
+        },
+      ]
+    }),
+  )
+
+  return {
+    ...snapshotRecord,
+    store,
   }
 }
 
