@@ -238,6 +238,7 @@ export default function App() {
   const selectionPublishTimeoutRef = useRef<number | null>(null)
   const canvasSaveTimeoutRef = useRef<number | null>(null)
   const isRestoringCanvasRef = useRef(false)
+  const restoredShapeIdsRef = useRef<Set<string>>(new Set())
   const lastPublishedSelectionRef = useRef('')
   const [status, setStatus] = useState('')
   const [frameAction, setFrameAction] = useState<FrameActionState>(null)
@@ -320,7 +321,7 @@ export default function App() {
       })
       scheduleSelectionPublish(editor)
       if (!isRestoringCanvasRef.current) {
-        normalizeImportedMediaShapes(editor, Object.values(changes.added))
+        normalizeImportedMediaShapes(editor, Object.values(changes.added), restoredShapeIdsRef.current)
         normalizeLegacyDefaultArrowBends(editor, Object.values(changes.added))
         detachArrowBindings(editor, Object.values(changes.added))
       }
@@ -337,7 +338,9 @@ export default function App() {
       const document = await loadCanvasDocument()
       if (!document?.snapshot) return
 
-      editor.store.loadStoreSnapshot(clearVolatileCanvasSnapshotState(document.snapshot) as never)
+      const restoredSnapshot = clearVolatileCanvasSnapshotState(document.snapshot)
+      restoredShapeIdsRef.current = getSnapshotShapeIds(restoredSnapshot)
+      editor.store.loadStoreSnapshot(restoredSnapshot as never)
       if (document.currentPageId) {
         try {
           editor.setCurrentPage(document.currentPageId as never)
@@ -346,9 +349,12 @@ export default function App() {
         }
       }
       if (document.camera) editor.setCamera(document.camera, { immediate: true })
-      editor.selectNone()
       normalizeLegacyDefaultArrowBends(editor)
       detachArrowBindings(editor)
+      await waitForRestoreSideEffects(editor)
+      editor.selectNone()
+      setFrameAction(getSelectedFrameAction(editor))
+      setSelectedMediaInfo(getSelectedMediaInfo(editor))
       showStatus('Restored local canvas.', 1800)
       void publishCurrentSelection(editor)
     } catch (error) {
@@ -360,6 +366,22 @@ export default function App() {
     } finally {
       isRestoringCanvasRef.current = false
     }
+  }
+
+  function waitForRestoreSideEffects(editor: Editor, frameCount = 3) {
+    const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
+    return new Promise<void>((resolve) => {
+      let remaining = frameCount
+      const tick = () => {
+        remaining -= 1
+        if (remaining <= 0) {
+          resolve()
+          return
+        }
+        appWindow.requestAnimationFrame(tick)
+      }
+      appWindow.requestAnimationFrame(tick)
+    })
   }
 
   function scheduleCanvasDocumentSave(editor: Editor) {
@@ -770,6 +792,23 @@ function clearVolatileCanvasSnapshotState(snapshot: unknown) {
   }
 }
 
+function getSnapshotShapeIds(snapshot: unknown) {
+  const shapeIds = new Set<string>()
+  if (!snapshot || typeof snapshot !== 'object') return shapeIds
+  const snapshotRecord = snapshot as { store?: Record<string, unknown> }
+  if (!snapshotRecord.store || typeof snapshotRecord.store !== 'object') return shapeIds
+
+  for (const record of Object.values(snapshotRecord.store)) {
+    if (!record || typeof record !== 'object') continue
+    const typedRecord = record as { id?: string; typeName?: string }
+    if (typedRecord.typeName === 'shape' && typeof typedRecord.id === 'string') {
+      shapeIds.add(typedRecord.id)
+    }
+  }
+
+  return shapeIds
+}
+
 function getSelectedMediaInfo(editor: Editor): SelectedMediaInfo {
   const selectedMedia = editor.getSelectedShapes().find((shape) => shape.type === MEDIA_IMAGE_SHAPE || shape.type === 'image' || shape.type === 'video')
   if (!selectedMedia) return null
@@ -789,7 +828,7 @@ function getSelectedMediaInfo(editor: Editor): SelectedMediaInfo {
   }
 }
 
-function normalizeImportedMediaShapes(editor: Editor, records: unknown[]) {
+function normalizeImportedMediaShapes(editor: Editor, records: unknown[], ignoredShapeIds = new Set<string>()) {
   const updates: TLShapePartial[] = []
   const seen = new Set<string>()
   const importedShapes: TLShape[] = []
@@ -799,6 +838,7 @@ function normalizeImportedMediaShapes(editor: Editor, records: unknown[]) {
     const shape = record as TLShape
     if (shape.typeName !== 'shape') continue
     if (shape.type !== 'image' && shape.type !== 'video') continue
+    if (ignoredShapeIds.has(shape.id)) continue
     if (seen.has(shape.id)) continue
     seen.add(shape.id)
     importedShapes.push(shape)
