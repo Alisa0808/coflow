@@ -51,7 +51,6 @@ import {
 
 const shapeUtils = [MediaImageShapeUtil]
 const MAX_ASSET_SIZE_BYTES = 2 * 1024 * 1024 * 1024
-const IMPORTED_MEDIA_INITIAL_DISPLAY_FIT = { w: 1280, h: 720 }
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 32 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024
 const CANVAS_CLIENT_VERSION = '2026-06-27-native-media-writeback-v1'
@@ -405,7 +404,6 @@ export default function App() {
       })
       scheduleSelectionPublish(editor)
       if (!isRestoringCanvasRef.current) {
-        normalizeImportedMediaShapes(editor, Object.values(changes.added), restoredShapeIdsRef.current)
         normalizeLegacyDefaultArrowBends(editor, Object.values(changes.added))
         syncAnnotationArrowStyles(editor, Object.values(changes.updated).map(([, next]) => next))
       }
@@ -527,7 +525,7 @@ export default function App() {
   ): Promise<{ request: CodexFrameRequest; context: FrameContext; screenshotResult: FrameScreenshotResult } | null> {
     const editor = editorRef.current
     if (!editor) return null
-    const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
+    const shapes = toCanvasShapeRecords(editor, editor.getCurrentPageShapesSorted())
     const frame = shapes.find((shape) => shape.id === frameId && shape.type === 'frame') ?? findContextFrame(editor, shapes)
     if (!frame) {
       showStatus('No frame found. Select a frame around the media and annotations first.', 5200)
@@ -688,7 +686,7 @@ export default function App() {
     const editor = editorRef.current
     if (!editor) return
 
-    const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
+    const shapes = toCanvasShapeRecords(editor, editor.getCurrentPageShapesSorted())
     const frame = command.frameId ? shapes.find((shape) => shape.id === command.frameId && shape.type === 'frame') : findContextFrame(editor, shapes)
     if (!frame) {
       showStatus('Codex writeback skipped: target frame not found.', 5200)
@@ -810,8 +808,8 @@ export default function App() {
       return
     }
 
-    const sourceBounds = getNativeShapeBounds(source)
-    const targetBounds = getNativeShapeBounds(target)
+    const sourceBounds = getShapePageBoundsRecord(editor, source)
+    const targetBounds = getShapePageBoundsRecord(editor, target)
     const sourceCenter = getBoundsCenter(sourceBounds)
     const targetCenter = getBoundsCenter(targetBounds)
     const sourceIsLeft = sourceCenter.x <= targetCenter.x
@@ -1061,7 +1059,8 @@ function getSelectedFrameAction(editor: Editor): FrameActionState {
   if (!selectedFrame) return null
 
   const frame = selectedFrame as TLShape & { props: { name?: string; w?: number; h?: number } }
-  const topLeft = editor.pageToScreen({ x: frame.x, y: frame.y })
+  const frameBounds = getShapePageBoundsRecord(editor, frame)
+  const topLeft = editor.pageToScreen({ x: frameBounds.x, y: frameBounds.y })
   const frameName = frame.props.name || 'Untitled frame'
 
   return {
@@ -1204,91 +1203,6 @@ function createNativeGeneratedMediaRecords(input: {
   return { asset, shape }
 }
 
-function normalizeImportedMediaShapes(editor: Editor, records: unknown[], ignoredShapeIds = new Set<string>()) {
-  const updates: TLShapePartial[] = []
-  const seen = new Set<string>()
-  const importedShapes: TLShape[] = []
-  const importedShapeIds: TLShapeId[] = []
-
-  for (const record of records) {
-    const shape = record as TLShape
-    if (shape.typeName !== 'shape') continue
-    if (shape.type !== 'image' && shape.type !== 'video') continue
-    if (ignoredShapeIds.has(shape.id)) continue
-    if (seen.has(shape.id)) continue
-    seen.add(shape.id)
-    importedShapes.push(shape)
-    importedShapeIds.push(shape.id)
-  }
-
-  if (importedShapes.length === 0) return
-
-  const occupiedBounds = editor
-    .getCurrentPageShapes()
-    .filter((shape) => !seen.has(shape.id))
-    .map(getNativeShapeBounds)
-
-  for (const shape of importedShapes) {
-    const props = shape.props as { w?: number; h?: number }
-    const w = typeof props.w === 'number' ? props.w : 0
-    const h = typeof props.h === 'number' ? props.h : 0
-    const fitted = containSize({ w, h }, IMPORTED_MEDIA_INITIAL_DISPLAY_FIT)
-    const initialBounds = {
-      x: shape.x,
-      y: shape.y,
-      w: fitted.w || w,
-      h: fitted.h || h,
-    }
-    const placement = findOpenImportedMediaBounds(initialBounds, occupiedBounds, getViewportBounds(editor))
-    const needsResize = fitted.w < w || fitted.h < h
-    const needsMove = placement.x !== shape.x || placement.y !== shape.y
-    if (!needsResize && !needsMove) {
-      occupiedBounds.push(placement)
-      continue
-    }
-
-    if (shape.type === 'image') {
-      updates.push({
-        id: shape.id,
-        type: 'image',
-        x: placement.x,
-        y: placement.y,
-        props: {
-          w: fitted.w,
-          h: fitted.h,
-        },
-      })
-    } else {
-      updates.push({
-        id: shape.id,
-        type: 'video',
-        x: placement.x,
-        y: placement.y,
-        props: {
-          w: fitted.w,
-          h: fitted.h,
-        },
-      })
-    }
-    occupiedBounds.push(placement)
-  }
-
-  editor.run(() => {
-    if (updates.length > 0) editor.updateShapes(updates)
-    editor.select(...importedShapeIds)
-  })
-  focusImportedMedia(editor)
-}
-
-function focusImportedMedia(editor: Editor) {
-  const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
-  appWindow.requestAnimationFrame(() => {
-    appWindow.requestAnimationFrame(() => {
-      editor.zoomToSelection({ animation: { duration: 180 } })
-    })
-  })
-}
-
 function normalizeLegacyDefaultArrowBends(editor: Editor, records: unknown[] = editor.store.allRecords()) {
   const updates: TLShapePartial[] = []
   for (const record of records) {
@@ -1333,7 +1247,7 @@ function syncAnnotationArrowStyles(editor: Editor, records: unknown[] = editor.s
   editor.run(() => editor.updateShapes(updates), { history: 'ignore' })
 }
 
-function getNativeShapeBounds(shape: TLShape): Bounds {
+function getShapeLocalBoundsRecord(shape: TLShape): Bounds {
   const props = shape.props as { w?: number; h?: number }
   return {
     x: shape.x,
@@ -1343,74 +1257,21 @@ function getNativeShapeBounds(shape: TLShape): Bounds {
   }
 }
 
+function getShapePageBoundsRecord(editor: Editor, shape: TLShape): Bounds {
+  const pageBounds = editor.getShapePageBounds(shape.id)
+  if (!pageBounds) return getShapeLocalBoundsRecord(shape)
+  return {
+    x: pageBounds.x,
+    y: pageBounds.y,
+    w: pageBounds.w,
+    h: pageBounds.h,
+  }
+}
+
 function getBoundsCenter(bounds: Bounds) {
   return {
     x: bounds.x + bounds.w / 2,
     y: bounds.y + bounds.h / 2,
-  }
-}
-
-function getViewportBounds(editor: Editor): Bounds {
-  const viewport = editor.getViewportPageBounds()
-  return {
-    x: viewport.minX,
-    y: viewport.minY,
-    w: viewport.width,
-    h: viewport.height,
-  }
-}
-
-function findOpenImportedMediaBounds(initial: Bounds, occupied: Bounds[], viewport: Bounds): Bounds {
-  const gap = 56
-  const horizontalStep = initial.w + gap
-  const verticalStep = initial.h + gap
-  const candidates: Bounds[] = []
-
-  for (let ring = 0; ring < 8; ring += 1) {
-    for (let dx = -ring; dx <= ring; dx += 1) {
-      for (let dy = -ring; dy <= ring; dy += 1) {
-        if (ring !== 0 && Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue
-        candidates.push({
-          ...initial,
-          x: initial.x + dx * horizontalStep,
-          y: initial.y + dy * verticalStep,
-        })
-      }
-    }
-  }
-
-  const openCandidates = candidates.filter((candidate) => !occupied.some((bounds) => boundsIntersect(candidate, inflateBounds(bounds, 24))))
-  const visibleCandidate = openCandidates.find((candidate) => boundsCenterIsInside(candidate, inflateBounds(viewport, -24)))
-  return visibleCandidate ?? openCandidates[0] ?? initial
-}
-
-function boundsIntersect(a: Bounds, b: Bounds) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
-}
-
-function boundsCenterIsInside(bounds: Bounds, container: Bounds) {
-  const center = {
-    x: bounds.x + bounds.w / 2,
-    y: bounds.y + bounds.h / 2,
-  }
-  return center.x >= container.x && center.x <= container.x + container.w && center.y >= container.y && center.y <= container.y + container.h
-}
-
-function inflateBounds(bounds: Bounds, padding: number): Bounds {
-  return {
-    x: bounds.x - padding,
-    y: bounds.y - padding,
-    w: bounds.w + padding * 2,
-    h: bounds.h + padding * 2,
-  }
-}
-
-function containSize(size: { w: number; h: number }, max: { w: number; h: number }) {
-  if (size.w <= 0 || size.h <= 0) return size
-  const scale = Math.min(1, max.w / size.w, max.h / size.h)
-  return {
-    w: Math.round(size.w * scale),
-    h: Math.round(size.h * scale),
   }
 }
 
@@ -1488,20 +1349,27 @@ function findContextFrame(editor: Editor, shapes: CanvasShapeRecord[]) {
   return shapes.find((shape) => shape.type === 'frame')
 }
 
-function toCanvasShapeRecords(shapes: TLShape[]): CanvasShapeRecord[] {
-  return shapes.map((shape) => ({
-    id: shape.id,
-    type: shape.type as CanvasShapeRecord['type'],
-    x: shape.x,
-    y: shape.y,
-    parentId: shape.parentId,
-    props: normalizeProps(shape),
-  }))
+function toCanvasShapeRecords(editor: Editor, shapes: TLShape[]): CanvasShapeRecord[] {
+  return shapes.map((shape) => {
+    const bounds = getShapePageBoundsRecord(editor, shape)
+    return {
+      id: shape.id,
+      type: shape.type as CanvasShapeRecord['type'],
+      x: bounds.x,
+      y: bounds.y,
+      parentId: shape.parentId,
+      props: {
+        ...normalizeProps(shape),
+        w: bounds.w,
+        h: bounds.h,
+      },
+    }
+  })
 }
 
 async function buildSelectionSnapshot(editor: Editor): Promise<CanvasSelectionSnapshot> {
   const selectedShapes = editor.getSelectedShapes()
-  const shapes = toCanvasShapeRecords(editor.getCurrentPageShapesSorted())
+  const shapes = toCanvasShapeRecords(editor, editor.getCurrentPageShapesSorted())
   const activeFrameRecord = findActiveFrameForSelection(editor, shapes)
   const activeFrame = activeFrameRecord ? await extractMaterializedFrameContext(editor, shapes, activeFrameRecord.id) : undefined
 
@@ -1516,7 +1384,7 @@ async function buildSelectionSnapshot(editor: Editor): Promise<CanvasSelectionSn
 
 async function toCanvasItem(editor: Editor, shape: TLShape): Promise<CanvasItem> {
   const props = normalizeProps(shape)
-  const bounds = getNativeShapeBounds(shape)
+  const bounds = getShapePageBoundsRecord(editor, shape)
   const asset = await getCanvasAssetContext(editor, shape, props)
   const text = getShapePlainText(props)
   const metadata = pickMetadata(props, [
@@ -1591,7 +1459,7 @@ async function getCanvasAssetContext(editor: Editor, shape: TLShape, props: Reco
     absolutePath = materialized.absolutePath
   }
 
-  const bounds = getNativeShapeBounds(shape)
+  const bounds = getShapePageBoundsRecord(editor, shape)
   return {
     assetId,
     mediaType,
