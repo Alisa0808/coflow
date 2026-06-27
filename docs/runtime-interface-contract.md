@@ -96,8 +96,8 @@ Current Phase 0.6 implementation note:
 - Codex / an active Codex agent skill is responsible for choosing image/video/3D skill, provider, model, mode, and parameters.
 - Browser-side provider execution may exist as a debug spike path only; it is not the canonical product path.
 - `Generate version` appears only when an active skill / auto-run mode is already established.
-- Phase 0.6 includes a local `codex-simulated` active skill executor to prove the loop without spending provider credits.
-- The simulated executor is not the product generation backend; real GPT Image 2 / Seedance 2.0 / Atlas-backed execution belongs to Codex Skills/provider adapters.
+- Phase 0.6 active skill execution uses the real provider boundary by default.
+- If provider credentials are missing or the provider fails, the canvas reports failure instead of inserting mock media.
 
 ```text
 User clicks Send to Codex
@@ -157,10 +157,10 @@ Session payload:
 ```json
 {
   "status": "active",
-  "skillName": "codex-image-edit",
-  "displayName": "Codex Image Edit",
+  "skillName": "codex-media-canvas-image",
+  "displayName": "Canvas Image Skill",
   "outputMediaType": "image",
-  "provider": "codex-simulated",
+  "provider": "atlas",
   "autoRun": true
 }
 ```
@@ -172,7 +172,9 @@ browser extracts bounded frame context
 browser saves screenshot and Frame Input
 browser marks the request ready_to_execute
 browser POST /api/active-skill/run-frame
-server/local active skill queues canvas.create_version
+server runs the real provider boundary using the active skill policy
+server materializes the provider output into .codex-media-canvas/assets
+server queues canvas.create_version
 browser polls /api/commands/pending
 browser places output media and lineage arrow
 ```
@@ -183,7 +185,9 @@ Rules:
 - `Generate version` must not appear as a generic provider button.
 - Active Skill mode is sticky only as session metadata; it is not a whiteboard Skill marketplace.
 - Real provider selection stays inside Codex Skill logic.
-- Phase 0.6 `codex-simulated` output is only a deterministic loop test.
+- `codex-media-canvas-image` decides text-to-image vs image/reference edit.
+- `codex-media-canvas-video` decides text-to-video vs image/reference/video regeneration.
+- Mock fallback is not allowed for normal product experience.
 
 ## Upload flow
 

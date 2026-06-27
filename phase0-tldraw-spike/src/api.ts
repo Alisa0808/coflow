@@ -9,7 +9,7 @@ export type CanvasCommand = {
   targetShapeId?: string
   linkType?: 'version' | 'reference' | 'derivative'
   prompt?: string
-  provider?: 'codex-simulated' | 'mock-provider' | 'atlas' | 'openai' | 'seedance' | 'kling'
+  provider?: 'mock-provider' | 'atlas' | 'openai' | 'seedance' | 'kling'
   outputMediaType?: 'image' | 'video'
   generationMode?: string
   mediaType?: 'image' | 'video'

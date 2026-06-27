@@ -1,0 +1,40 @@
+{
+  "name": "codex-media-canvas",
+  "version": "0.2.0",
+  "description": "A Codex-driven media canvas for image and video generation/editing from whiteboard selection, frames, and annotations.",
+  "author": {
+    "name": "Codex Media Canvas contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "plugin",
+    "mcp",
+    "media-canvas",
+    "image-generation",
+    "video-generation",
+    "annotation",
+    "asset-lineage"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Media Canvas",
+    "shortDescription": "Open a canvas, generate or edit images/videos from frames and annotations, and write results back with lineage.",
+    "longDescription": "Codex Media Canvas keeps the whiteboard as visual context and writeback surface. Codex skills decide image/video generation modes, call real providers, and insert results back onto the canvas.",
+    "developerName": "Codex Media Canvas contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write",
+      "MCP",
+      "Skills"
+    ],
+    "defaultPrompt": [
+      "Open Codex Media Canvas.",
+      "Generate an image on the canvas.",
+      "Edit the selected image according to the frame annotations.",
+      "Generate a video from the selected frame or prompt."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

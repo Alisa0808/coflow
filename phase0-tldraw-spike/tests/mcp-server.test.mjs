@@ -84,17 +84,17 @@ test('active skill session can be activated and cleared over MCP', async () => {
     const activated = await client.call('tools/call', {
       name: 'canvas.activate_skill_session',
       arguments: {
-        skillName: 'codex-image-edit',
-        displayName: 'Codex Image Edit',
+        skillName: 'codex-media-canvas-image',
+        displayName: 'Canvas Image Skill',
         outputMediaType: 'image',
-        provider: 'codex-simulated',
+        provider: 'atlas',
         autoRun: true,
       },
     })
     const activatePayload = JSON.parse(activated.result.content[0].text)
     assert.equal(activatePayload.ok, true)
     assert.equal(activatePayload.session.status, 'active')
-    assert.equal(activatePayload.session.skillName, 'codex-image-edit')
+    assert.equal(activatePayload.session.skillName, 'codex-media-canvas-image')
     assert.equal(activatePayload.session.autoRun, true)
 
     const current = await client.call('tools/call', {
@@ -102,7 +102,7 @@ test('active skill session can be activated and cleared over MCP', async () => {
       arguments: {},
     })
     const currentPayload = JSON.parse(current.result.content[0].text)
-    assert.equal(currentPayload.session.displayName, 'Codex Image Edit')
+    assert.equal(currentPayload.session.displayName, 'Canvas Image Skill')
 
     const cleared = await client.call('tools/call', {
       name: 'canvas.clear_active_skill_session',

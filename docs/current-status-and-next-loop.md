@@ -52,7 +52,7 @@ The canvas is a **visual context container and writeback surface**. Codex is the
 - Active Skill Session metadata under `.codex-media-canvas/metadata/active-skill-session.json`.
 - Minimal active-skill indicator in the canvas.
 - Frame action switches from `Send to Codex` to `Generate version` only when active skill `autoRun` is enabled.
-- A local `codex-simulated` skill executor for Phase 0.6 end-to-end loop validation.
+- Active skill execution now routes to the real provider boundary by default (`atlas`), and must fail visibly instead of inserting mock media.
 
 ## 3. What changed in Phase 0.5
 
@@ -104,7 +104,8 @@ Active skill / auto-run mode is on
 → Generate version
 → canvas publishes fresh Frame Input with ready_to_execute status
 → active Codex skill reads frame input
-→ Phase 0.6 local simulated executor produces a deterministic local output
+→ active skill infers the generation mode
+→ real provider execution runs outside the browser canvas
 → canvas writeback
 ```
 
@@ -112,9 +113,9 @@ This preserves the low-friction Lovart/Cowart-style editing loop without turning
 
 Important boundary:
 
-- Phase 0.6 `codex-simulated` output proves the product loop and writeback mechanics.
-- It does not claim real GPT Image 2 / Seedance 2.0 quality or provider correctness.
-- Real generation remains a Codex Skill/provider responsibility in later phases.
+- Phase 0.6 now uses the real provider boundary for active skill execution.
+- If provider credentials are missing or the provider fails, the canvas must show failure instead of inserting a mock image/video.
+- Real generation remains a Codex Skill/provider responsibility, not a browser canvas responsibility.
 
 ### 3.4 Image/video generation and editing are skills
 
@@ -158,8 +159,9 @@ Acceptance for Phase 0.5:
 - `canvas.capture_selection` is currently a first-class structured MCP capture. It returns the latest published selection and can include the latest matching Frame Input / frame screenshot artifacts. It does not yet ask the browser to create a fresh arbitrary selected-region PNG on demand.
 - `canvas.link_versions` exists as a separate MCP writeback tool and queues a visible, unbound lineage arrow between two existing shapes.
 - Direct provider executor code still exists for debugging/spike history and should be isolated further.
-- Active skill session mode is implemented as a local Phase 0.6 loop, but real provider-backed Skills are not packaged yet.
-- Real image/video/3D skills are not packaged yet.
+- Active skill session mode is implemented for real provider-backed image/video loops.
+- Image and video Skills are packaged as merged intent skills: each skill decides whether the request is text-to-media, reference-to-media, or edit/regeneration.
+- 3D skills are not packaged yet.
 - Host-level automatic composer attachment is not available; screenshot copy remains best-effort.
 - Full tldraw/Cowart-grade snapshot sanitization and multi-page history are not done.
 
@@ -204,15 +206,15 @@ Acceptance:
 - A visible but minimal active-skill indicator exists.
 - The frame button text changes only when active skill mode is present.
 - Generated output still goes through Codex writeback tools.
-- Phase 0.6 can be tested without a real paid provider by activating `codex-simulated`.
-- The local simulated output must be clearly treated as a loop test, not product-quality generation.
+- Phase 0.6 requires a real provider key for actual generation; default provider is `atlas`.
+- Missing credentials or provider failure must produce a visible error, not a mock fallback.
 
 Manual validation:
 
 ```bash
 curl -X PUT http://127.0.0.1:5176/api/active-skill/session \
   -H 'content-type: application/json' \
-  -d '{"skillName":"codex-image-edit","displayName":"Codex Image Edit","outputMediaType":"image","provider":"codex-simulated","autoRun":true}'
+  -d '{"skillName":"codex-media-canvas-image","displayName":"Canvas Image Skill","outputMediaType":"image","provider":"atlas","autoRun":true}'
 ```
 
 Then select a frame containing media and annotations:
@@ -220,10 +222,16 @@ Then select a frame containing media and annotations:
 ```text
 Generate version
 → fresh Frame Input saved
-→ local skill result queued
+→ real provider output materialized locally
 → browser places a generated child media shape next to the frame
 → lineage arrow is drawn
 ```
+
+Packaged user-facing Skills:
+
+- `codex-media-canvas-open`
+- `codex-media-canvas-image`
+- `codex-media-canvas-video`
 
 ### Phase 1: official tldraw agent architecture migration
 

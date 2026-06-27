@@ -717,7 +717,16 @@ Phase 0.6 的实现边界：
 - session 激活后，画布只显示一个轻量 active skill 状态，不显示 skill marketplace；
 - 选中 frame 后，按钮从 `Send to Codex` 切换为 `Generate version`；
 - 点击 `Generate version` 仍然会先生成 Frame Input，再触发 active skill，而不是让白板自己拼 provider payload；
-- 当前 `codex-simulated` 只用于本地闭环验证，真实 GPT image 2 / Seedance 2.0 / Atlas 执行属于后续 Codex Skill/provider 层。
+- active skill 执行默认走真实 provider boundary，例如 Atlas 上的 GPT image 2 / Seedance 2.0；
+- 如果 provider key 缺失或调用失败，应该明确失败，而不是插入 mock 图或 mock 视频。
+
+Skill 入口应该合并为意图型，而不是 provider mode 型：
+
+- `codex-media-canvas-image`：同时处理文生图、图生图、参考图生成、图片编辑，由 skill 根据 Frame Input / selection / 用户提示判断模式；
+- `codex-media-canvas-video`：同时处理文生视频、图生视频、参考生视频、视频再生成 / keyframe-guided revision，由 skill 根据输入素材类型和 provider 能力判断模式；
+- `codex-media-canvas-open`：只负责打开白板。
+
+用户不应该被要求理解 `text_to_image`、`image_edit`、`reference_to_video` 这类 provider mode；这些属于 skill 内部推断和 provider adapter 责任。
 
 Session Mode 需要记录：
 

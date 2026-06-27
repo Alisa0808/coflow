@@ -159,7 +159,7 @@ const tools = [
         },
         provider: {
           type: 'string',
-          description: 'Provider/runtime label, e.g. codex-simulated, openai, atlas, seedance.',
+          description: 'Provider/runtime label, e.g. atlas, openai, seedance.',
         },
         autoRun: {
           type: 'boolean',
@@ -692,10 +692,10 @@ async function readActiveSkillSession() {
 async function writeActiveSkillSession(input = {}) {
   const now = new Date().toISOString()
   const previous = await readActiveSkillSession()
-  const skillName = typeof input.skillName === 'string' && input.skillName ? input.skillName : 'codex-image-edit'
-  const displayName = typeof input.displayName === 'string' && input.displayName ? input.displayName : 'Codex Image Edit'
+  const skillName = typeof input.skillName === 'string' && input.skillName ? input.skillName : 'codex-media-canvas-image'
+  const displayName = typeof input.displayName === 'string' && input.displayName ? input.displayName : 'Canvas Image Skill'
   const outputMediaType = input.outputMediaType === 'video' ? 'video' : 'image'
-  const provider = typeof input.provider === 'string' && input.provider ? input.provider : 'codex-simulated'
+  const provider = typeof input.provider === 'string' && input.provider ? input.provider : 'atlas'
   const session = {
     id: previous?.id || `active-skill:${Date.now()}:${Math.random().toString(36).slice(2)}`,
     status: 'active',

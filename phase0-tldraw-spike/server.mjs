@@ -643,10 +643,10 @@ async function readActiveSkillSession() {
 async function writeActiveSkillSession(input = {}) {
   const now = new Date().toISOString()
   const previous = await readActiveSkillSession()
-  const skillName = typeof input.skillName === 'string' && input.skillName ? input.skillName : 'codex-image-edit'
-  const displayName = typeof input.displayName === 'string' && input.displayName ? input.displayName : 'Codex Image Edit'
+  const skillName = typeof input.skillName === 'string' && input.skillName ? input.skillName : 'codex-media-canvas-image'
+  const displayName = typeof input.displayName === 'string' && input.displayName ? input.displayName : 'Canvas Image Skill'
   const outputMediaType = input.outputMediaType === 'video' ? 'video' : 'image'
-  const provider = typeof input.provider === 'string' && input.provider ? input.provider : 'codex-simulated'
+  const provider = typeof input.provider === 'string' && input.provider ? input.provider : 'atlas'
   const session = {
     id: previous?.id || `active-skill:${Date.now()}:${Math.random().toString(36).slice(2)}`,
     status: 'active',
@@ -682,7 +682,7 @@ async function runActiveSkillFrame(input = {}) {
     throw new Error(`Latest Frame Input belongs to ${frameInput.requestId}, not ${input.frameRequestId}.`)
   }
 
-  const command = await createSimulatedSkillVersionCommand(session, frameInput, frameId)
+  const command = await createRealSkillVersionCommand(session, frameInput, frameId)
   await appendCommand(command)
   return {
     session,
@@ -691,32 +691,130 @@ async function runActiveSkillFrame(input = {}) {
   }
 }
 
-async function createSimulatedSkillVersionCommand(session, frameInput, frameId) {
+async function createRealSkillVersionCommand(session, frameInput, frameId) {
   const prompt = extractFramePromptText(frameInput)
-  const color = detectPromptColor(prompt)
-  const fileName = `skill-output-${Date.now()}.svg`
-  const localPath = `.codex-media-canvas/assets/images/${fileName}`
-  const absolutePath = join(assetsRoot, 'images', fileName)
-  const svg = simulatedSkillOutputSvg({ color, prompt, skillName: session.displayName })
-  await mkdir(join(assetsRoot, 'images'), { recursive: true })
-  await writeFile(absolutePath, svg)
+  const outputMediaType = session.outputMediaType === 'video' ? 'video' : 'image'
+  const references = extractFrameReferences(frameInput)
+  const generationMode = inferSkillGenerationMode(outputMediaType, references)
+  const extension = outputMediaType === 'video' ? 'mp4' : 'png'
+  const group = outputMediaType === 'video' ? 'videos' : 'images'
+  const requestId = `active-skill-generation:${Date.now()}`
+  const outputLocalPath = `.codex-media-canvas/assets/${group}/${sanitizeFilePart(requestId)}.${extension}`
+  const provider = normalizeActiveSkillProvider(session.provider)
+  const request = {
+    id: requestId,
+    provider,
+    generationMode,
+    kind: generationMode,
+    output: {
+      mediaType: outputMediaType,
+      localPath: outputLocalPath,
+    },
+    instructions: {
+      prompt,
+    },
+    references,
+  }
+  const execution = await runStrictProviderExecution(request)
+  const finalOutput = execution.providerOutput?.materialized ? execution.providerOutput : execution.output
 
   return createCommand({
     source: 'active-skill-session',
     type: 'canvas.create_version',
     frameId,
     prompt,
-    provider: session.provider,
-    mediaType: 'image',
-    outputMediaType: session.outputMediaType,
-    localPath,
-    absolutePath,
+    provider,
+    mediaType: outputMediaType,
+    outputMediaType,
+    generationMode,
+    localPath: finalOutput.localPath,
+    absolutePath: finalOutput.absolutePath,
     title: `${session.displayName} version`,
-    model: `${session.skillName}:phase-0.6-simulated`,
+    model: execution.externalExecution?.request?.model || execution.selectedProviderPayload?.model || execution.selectedProvider,
     status: 'succeeded',
     skillName: session.skillName,
     minClientVersion: CANVAS_CLIENT_VERSION,
   })
+}
+
+async function runStrictProviderExecution(request) {
+  const providerExecution = await prepareProviderExecution(request)
+  const { selectedProvider, selectedProviderPayload, externalExecution } = providerExecution
+  if (externalExecution?.status === 'skipped') {
+    throw new Error(`${selectedProvider} is not configured. Add ATLASCLOUD_API_KEY to .env.local before generating.`)
+  }
+  if (externalExecution?.status === 'processing') {
+    throw new Error(`${selectedProvider} is still processing. Background polling is not implemented for active canvas Skills yet.`)
+  }
+  if (externalExecution?.status !== 'succeeded') {
+    throw new Error(`${selectedProvider} generation failed: ${externalExecution?.error || JSON.stringify(externalExecution?.body ?? externalExecution)}`)
+  }
+
+  const outputMediaType = request.output?.mediaType === 'video' ? 'video' : 'image'
+  const fallbackLocalPath = request.output.localPath
+  const fallbackAbsolutePath = resolveStoreLocalPath(fallbackLocalPath)
+  const previewLocalPath = `.codex-media-canvas/assets/images/${sanitizeFilePart(request.id)}-preview.svg`
+  const previewAbsolutePath = resolveStoreLocalPath(previewLocalPath)
+  const previewSvg = providerStatePreviewSvg(request, 'processing')
+  await mkdir(join(assetsRoot, outputMediaType === 'video' ? 'videos' : 'images'), { recursive: true })
+  await mkdir(join(assetsRoot, 'images'), { recursive: true })
+  await writeFile(previewAbsolutePath, previewSvg)
+
+  const materialized = await materializeProviderOutputIfAvailable({
+    externalExecution,
+    outputMediaType,
+    fallbackLocalPath,
+    fallbackAbsolutePath,
+    fallbackPreviewLocalPath: previewLocalPath,
+    fallbackPreviewAbsolutePath: previewAbsolutePath,
+    fallbackPreviewSrc: svgDataUrl(previewSvg),
+  })
+  if (!materialized.providerOutput?.materialized) {
+    throw new Error(`${selectedProvider} succeeded but the output could not be materialized locally.`)
+  }
+
+  const result = {
+    id: `execution:${Date.now()}`,
+    requestId: request.id,
+    provider: request.provider,
+    status: 'succeeded',
+    selectedProvider,
+    selectedProviderPayload,
+    externalExecution,
+    providerOutput: materialized.providerOutput,
+    output: materialized.output,
+    preview: materialized.preview,
+    note: 'Active canvas Skill executed a real provider and materialized the output locally.',
+  }
+  await writeJson(join(executionsRoot, `${sanitizeFilePart(result.id)}.json`), result)
+  await writeJson(latestExecutionResultPath, {
+    updatedAt: new Date().toISOString(),
+    source: 'active-skill-session',
+    result,
+  })
+  return result
+}
+
+function normalizeActiveSkillProvider(provider) {
+  if (provider === 'seedance' || provider === 'kling') return provider
+  return 'atlas'
+}
+
+function inferSkillGenerationMode(outputMediaType, references) {
+  if (outputMediaType === 'video') return references.length > 0 ? 'reference_to_video' : 'text_to_video'
+  return references.length > 0 ? 'image_edit' : 'text_to_image'
+}
+
+function extractFrameReferences(frameInput) {
+  const media = Array.isArray(frameInput?.promptPart?.media) ? frameInput.promptPart.media : []
+  return media
+    .map((item) => ({
+      mediaType: item.shapeType === 'video' ? 'video' : 'image',
+      role: item.shapeId === frameInput?.summary?.anchorMediaId ? 'source' : 'reference',
+      localPath: item.localPath,
+      absolutePath: item.absolutePath,
+    }))
+    .filter((item) => item.localPath || item.absolutePath)
 }
 
 function extractFramePromptText(frameInput) {
@@ -730,47 +828,6 @@ function extractFramePromptText(frameInput) {
       .join('\n')
   }
   return `Generate a new version from frame "${frameInput?.summary?.frameName || frameInput?.frameId || 'Untitled frame'}".`
-}
-
-function detectPromptColor(prompt) {
-  const lower = String(prompt || '').toLowerCase()
-  if (lower.includes('pink') || lower.includes('粉')) return '#f472b6'
-  if (lower.includes('green') || lower.includes('绿')) return '#34d399'
-  if (lower.includes('blue') || lower.includes('蓝')) return '#60a5fa'
-  if (lower.includes('yellow') || lower.includes('黄')) return '#facc15'
-  if (lower.includes('orange') || lower.includes('橙')) return '#fb923c'
-  if (lower.includes('black') || lower.includes('黑')) return '#111827'
-  if (lower.includes('premium') || lower.includes('高级')) return '#c084fc'
-  return '#2563eb'
-}
-
-function simulatedSkillOutputSvg({ color }) {
-  const accent = escapeXml(color)
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <defs>
-    <radialGradient id="g1" cx="36%" cy="28%" r="72%">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="42%" stop-color="${accent}" stop-opacity="0.45"/>
-      <stop offset="100%" stop-color="#0f172a"/>
-    </radialGradient>
-    <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.84"/>
-      <stop offset="100%" stop-color="${accent}" stop-opacity="0.55"/>
-    </linearGradient>
-    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="18"/>
-    </filter>
-  </defs>
-  <rect width="1024" height="1024" rx="56" fill="url(#g1)"/>
-  <circle cx="770" cy="228" r="146" fill="${accent}" opacity="0.26" filter="url(#soft)"/>
-  <circle cx="276" cy="774" r="188" fill="#fff" opacity="0.16" filter="url(#soft)"/>
-  <path d="M292 676c108-228 310-346 514-372-34 234-174 416-420 510-62 24-126-76-94-138Z" fill="url(#g2)" opacity="0.92"/>
-  <path d="M244 330c146-86 332-98 512-38-134 22-316 92-442 222-44-38-70-98-70-184Z" fill="#fff" opacity="0.34"/>
-  <g fill="#fff" opacity="0.66">
-    <circle cx="210" cy="218" r="9"/><circle cx="284" cy="172" r="5"/><circle cx="836" cy="682" r="7"/>
-    <circle cx="722" cy="816" r="4"/><circle cx="150" cy="724" r="5"/><circle cx="612" cy="164" r="6"/>
-  </g>
-</svg>`
 }
 
 function normalizeSelectionSnapshot(input) {
