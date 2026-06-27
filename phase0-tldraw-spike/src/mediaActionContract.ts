@@ -51,8 +51,8 @@ export function createGenerateMediaAction(args: {
     prompt: args.prompt,
     providerPolicy: {
       preferredProvider,
-      fallbackProviders: args.providerPolicy?.fallbackProviders ?? (preferredProvider === 'mock-provider' ? [] : ['mock-provider']),
-      allowMockFallback: args.providerPolicy?.allowMockFallback ?? true,
+      fallbackProviders: args.providerPolicy?.fallbackProviders ?? [],
+      allowMockFallback: args.providerPolicy?.allowMockFallback ?? preferredProvider === 'mock-provider',
     },
     frameContext: args.frameContext,
     outputMediaType: args.outputMediaType,

@@ -260,6 +260,16 @@ body {
   transform: scale(0.98);
 }
 
+.frame-action-button:disabled {
+  cursor: progress;
+  opacity: 0.72;
+  transform: none;
+}
+
+.frame-action-button:disabled:hover {
+  box-shadow: none;
+}
+
 .frame-action-button__icon {
   display: grid;
   width: 18px;

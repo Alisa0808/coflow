@@ -88,7 +88,7 @@ Rules:
 
 ## Codex bridge and generation flow
 
-Current Phase 0.6 implementation note:
+Current Phase 1 implementation note:
 
 - The default frame button is `Send to Codex`.
 - `Send to Codex` extracts bounded frame context, saves a hidden Frame Input JSON, saves a frame screenshot artifact, and publishes an awaiting-user-instruction frame request.
@@ -96,8 +96,9 @@ Current Phase 0.6 implementation note:
 - Codex / an active Codex agent skill is responsible for choosing image/video/3D skill, provider, model, mode, and parameters.
 - Browser-side provider execution may exist as a debug spike path only; it is not the canonical product path.
 - `Generate version` appears only when an active skill / auto-run mode is already established, and it must appear as an additional shortcut rather than replacing `Send to Codex`.
-- Phase 0.6 active skill execution uses the real provider boundary by default.
+- Phase 1 active skill execution uses the real provider boundary by default.
 - If provider credentials are missing or the provider fails, the canvas reports failure instead of inserting mock media.
+- Default generation actions do not allow mock fallback. `mock-provider` is reserved for explicit local tests/debugging.
 
 ```text
 User clicks Send to Codex
@@ -233,9 +234,11 @@ ProviderReadyGenerationRequest
 Atlas-specific rules when an active skill or debug executor uses Atlas:
 
 - If `ATLASCLOUD_API_KEY` is configured, local references are uploaded through `/model/uploadMedia`.
-- Image edit and image-to-video use the uploaded reference as `image_url`.
+- Image edit uses the uploaded reference as `image`.
+- Image-to-video / reference-to-video uses the uploaded reference as `image_url`.
+- AVIF references stored as `.avif.bin` are normalized to PNG before Atlas image-edit upload.
 - Image/video generation result URLs are downloaded into local asset store.
-- If Atlas is not configured, execution may produce a local mock fallback, and `mockFallback: true` must be visible in `latest-execution-result.json`.
+- If Atlas is not configured, active Skill execution fails visibly and must not insert mock media. Debug-only executor paths may still produce an explicit mock fallback when intentionally invoked.
 
 Product rule:
 
@@ -307,8 +310,8 @@ Security rules:
 
 ## Known cleanup targets
 
-- `src/providerAdapter.ts` and `lib/provider-executor.mjs` duplicate provider payload mapping. Keep tests aligned for now; consolidate into one shared JS/TS contract before Phase 1.
+- `src/providerAdapter.ts` and `lib/provider-executor.mjs` duplicate provider payload mapping. Keep tests aligned for now; consolidate into one shared JS/TS contract before Phase 2.
 - `metadata/latest-*.json` names can make people think they are authoritative history. They are only snapshots; history is in `executions/` and `operations.jsonl`.
-- Video output currently uses SVG preview fallback even when the final provider output is a video. Phase 1 should add first-frame thumbnail extraction.
+- Video output currently uses SVG preview fallback even when the final provider output is a video. Phase 2 should add first-frame thumbnail extraction.
 - `/api/executions/run-latest` and direct generation-request execution should be marked debug-only or moved behind active skill execution.
-- `canvas.capture_selection` and `canvas.link_versions` now exist as first-class MCP tools. `capture_selection` returns structured selection plus optional latest matching frame artifacts; fresh browser-rendered selected-region PNG capture is still a Phase 1 cleanup target.
+- `canvas.capture_selection` and `canvas.link_versions` now exist as first-class MCP tools. `capture_selection` returns structured selection plus optional latest matching frame artifacts; fresh browser-rendered selected-region PNG capture is still a Phase 2 cleanup target.

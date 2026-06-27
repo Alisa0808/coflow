@@ -363,7 +363,7 @@ server.on('error', (error) => {
 })
 
 server.listen(port, '127.0.0.1', () => {
-  console.log(`Phase 0 local server listening on http://127.0.0.1:${port}/`)
+  console.log(`Codex Media Canvas local server listening on http://127.0.0.1:${port}/`)
   console.log(`Workspace store: ${storeRoot}`)
   console.log(
     process.env.ATLASCLOUD_API_KEY || process.env.ATLAS_PROVIDER_API_KEY || process.env.REAL_PROVIDER_API_KEY

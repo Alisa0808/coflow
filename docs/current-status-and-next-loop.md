@@ -4,7 +4,9 @@ Date: 2026-06-27
 
 ## 1. Stage verdict
 
-We are closing **Phase 0.6: Active Skill Loop Spike**.
+We are now at **Phase 1 RC: Image Annotation Edit Loop**.
+
+Phase 0 / 0.5 / 0.6 are closed as implementation spikes. The remaining Phase 1 work is acceptance hardening, not redefining the product shape.
 
 The project is no longer trying to prove that the browser canvas can call a provider API directly. That path produced confusing source/reference handling and drifted away from the product goal.
 
@@ -53,6 +55,9 @@ The canvas is a **visual context container and writeback surface**. Codex is the
 - Minimal active-skill indicator in the canvas.
 - Frame action always keeps `Send to Codex`; `Generate version` is added only when active skill `autoRun` is enabled.
 - Active skill execution now routes to the real provider boundary by default (`atlas`), and must fail visibly instead of inserting mock media.
+- Phase 1 image loop is now executable: frame + image + native annotations → active image Skill → Atlas / GPT image 2 edit → local output materialization → native tldraw image asset writeback → visible lineage arrow.
+- `Generate version` immediately enters a visible generating state and disables repeat clicks for the active frame until the run finishes.
+- Default media generation actions no longer allow mock fallback unless `mock-provider` is explicitly selected for tests.
 
 ## 3. What changed in Phase 0.5
 
@@ -96,7 +101,7 @@ This button should not spend generation credits on its own.
 
 ### 3.3 `Generate version` returns only inside active skill mode
 
-Current Phase 0.6 behavior:
+Current Phase 1 behavior:
 
 ```text
 Active skill / auto-run mode is on
@@ -113,7 +118,7 @@ This preserves the low-friction Lovart/Cowart-style editing loop without turning
 
 Important boundary:
 
-- Phase 0.6 now uses the real provider boundary for active skill execution.
+- Phase 1 uses the real provider boundary for active skill execution.
 - If provider credentials are missing or the provider fails, the canvas must show failure instead of inserting a mock image/video.
 - Real generation remains a Codex Skill/provider responsibility, not a browser canvas responsibility.
 
@@ -130,31 +135,34 @@ The project should expose generation/editing as Codex agent skills, for example:
 
 Those skills share the same canvas contract instead of each adding new whiteboard buttons.
 
-## 4. Current primary loop to validate
+## 4. Phase 1 primary loop to validate
 
 ```text
 1. Open the blank canvas.
 2. Upload or place media.
 3. Add annotations with notes/arrows/boxes.
 4. Frame the task region.
-5. Click Send to Codex.
-6. Codex reads canvas.get_frame_request / canvas.get_frame_input.
-7. User gives or confirms the instruction in Codex.
-8. Codex generates/edits through an active skill.
-9. Codex calls canvas.insert_media or canvas.create_version.
+5. Activate codex-media-canvas-image, or keep an existing active image Skill session.
+6. Click Generate version on the frame.
+7. Browser publishes a fresh Frame Input and frame screenshot.
+8. Active image Skill reads the Frame Input and calls the real provider.
+9. Server materializes the provider result into local assets.
 10. Browser places the result next to the framed context with lineage.
 ```
 
-Acceptance for Phase 0.5:
+Acceptance for Phase 1:
 
 - Codex can tell exactly which frame/selection is active.
 - Frame Input contains local/absolute asset paths, object ids, bounds, and annotation text.
 - Frame screenshot is saved as an auxiliary artifact, even if system clipboard copy fails.
 - Canvas reload preserves object positions.
-- Generated/writeback results are placed without relying on provider calls from the browser.
-- Documentation no longer treats browser-side provider execution as the main path.
+- Image edits use the source asset and frame annotations; annotations/UI chrome must not appear in the generated result.
+- Generated image results are written as native tldraw `asset` + `image` shape records.
+- The original image remains on canvas; the new image appears to the right with visible lineage.
+- Missing credentials or provider failure shows an error; it does not insert mock media.
+- `Send to Codex` remains available as the context bridge; `Generate version` is active-skill-only.
 
-## 5. What remains mock or incomplete
+## 5. What remains incomplete after Phase 1 RC
 
 - `canvas.capture_selection` is currently a first-class structured MCP capture. It returns the latest published selection and can include the latest matching Frame Input / frame screenshot artifacts. It does not yet ask the browser to create a fresh arbitrary selected-region PNG on demand.
 - `canvas.link_versions` exists as a separate MCP writeback tool and queues a visible, unbound lineage arrow between two existing shapes.
@@ -164,50 +172,33 @@ Acceptance for Phase 0.5:
 - 3D skills are not packaged yet.
 - Host-level automatic composer attachment is not available; screenshot copy remains best-effort.
 - Full tldraw/Cowart-grade snapshot sanitization and multi-page history are not done.
+- Video remains Phase 2 scope; video Skill exists, but Phase 1 acceptance is image-only.
 
 ## 6. Next implementation plan
 
-### Phase 0.5 closeout
+### Phase 1 closeout
 
-Status: mostly done.
+Status: implementation complete, pending user acceptance with a real image edit.
 
-1. Harden local persistence:
-   - keep page-level snapshots;
-   - keep manifest and view state;
-   - keep backup snapshots;
-   - avoid running import/reposition logic during restore.
+1. Manual acceptance:
+   - activate `codex-media-canvas-image`;
+   - frame a source image plus annotation;
+   - click `Generate version`;
+   - verify the output is relevant, native, local, and linked.
 
-2. Complete Codex bridge tools:
-   - `canvas.get_frame_input`;
-   - `canvas.get_frame_screenshot`;
-   - `canvas.capture_frame`;
-   - `canvas.get_asset`;
-   - later: browser-generated fresh selected-region PNG capture for `canvas.capture_selection`.
+2. Stabilization:
+   - confirm plugin MCP process is not stale;
+   - keep `dist-contracts` and TS contract source synchronized;
+   - isolate debug executor paths from product docs.
 
-3. Clean product docs:
-   - canvas is context bridge;
-   - skills own generation/editing;
-   - direct provider calls are debug-only;
-   - `Generate version` only appears in active skill mode.
-
-### Phase 0.6: active skill session mode
-
-Goal:
+3. Move next broad scope to Phase 2:
 
 ```text
-Codex activates a media skill
-→ canvas knows active skill mode
-→ frame action shows Send to Codex plus Generate version
-→ click triggers a skill-owned request, not browser provider execution
+video asset/frame loop
+→ video Skill acceptance
+→ first-frame thumbnail/proxy
+→ reference-to-video / keyframe-guided regeneration
 ```
-
-Acceptance:
-
-- A visible but minimal active-skill indicator exists.
-- `Send to Codex` stays visible in active skill mode; `Generate version` is an additional one-click execution shortcut.
-- Generated output still goes through Codex writeback tools.
-- Phase 0.6 requires a real provider key for actual generation; default provider is `atlas`.
-- Missing credentials or provider failure must produce a visible error, not a mock fallback.
 
 Manual validation:
 
@@ -233,7 +224,7 @@ Packaged user-facing Skills:
 - `codex-media-canvas-image`
 - `codex-media-canvas-video`
 
-### Phase 1: official tldraw agent architecture migration
+### Phase 2: video loop and official tldraw agent architecture migration
 
 Goal:
 

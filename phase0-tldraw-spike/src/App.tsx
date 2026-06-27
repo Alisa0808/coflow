@@ -262,6 +262,7 @@ export default function App() {
   const [activeSkillSession, setActiveSkillSession] = useState<ActiveSkillSession>(null)
   const [selectedMediaInfo, setSelectedMediaInfo] = useState<SelectedMediaInfo>(null)
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>(null)
+  const [generatingFrameIds, setGeneratingFrameIds] = useState<Set<string>>(() => new Set())
 
   function showStatus(message: string, durationMs = 3200) {
     const appWindow = editorRef.current?.getContainer().ownerDocument.defaultView ?? window
@@ -548,15 +549,27 @@ export default function App() {
       return
     }
 
+    if (generatingFrameIds.has(frameId)) return
+    setGeneratingFrameIds((current) => new Set(current).add(frameId))
+    showStatus(`Generating with ${activeSkillSession.displayName}. Keep this canvas open for writeback.`, 0)
+
     const published = await publishFrameForCodex(frameId, 'ready_to_execute')
-    if (!published) return
+    if (!published) {
+      setGeneratingFrameIds((current) => {
+        const next = new Set(current)
+        next.delete(frameId)
+        return next
+      })
+      showStatus('', 1)
+      return
+    }
 
     try {
       await runActiveSkillFrame({
         frameId: published.context.frameId,
         frameRequestId: published.request.id,
       })
-      showStatus(`Generating with ${activeSkillSession.displayName}. Keep this canvas open for writeback.`, 4200)
+      showStatus('Generated version is ready. Placing it on canvas…', 3200)
     } catch (error) {
       await recordOperation({
         type: 'active_skill.run_failed',
@@ -565,6 +578,12 @@ export default function App() {
         error: error instanceof Error ? error.message : String(error),
       })
       showStatus(error instanceof Error ? error.message : 'Active Skill run failed.', 6200)
+    } finally {
+      setGeneratingFrameIds((current) => {
+        const next = new Set(current)
+        next.delete(frameId)
+        return next
+      })
     }
   }
 
@@ -792,6 +811,7 @@ export default function App() {
         <FrameCodexAction
           action={frameAction}
           activeSkillSession={activeSkillSession}
+          isGenerating={generatingFrameIds.has(frameAction.frameId)}
           onGenerate={generateFrameVersion}
           onSend={sendFrameToCodex}
         />
@@ -847,11 +867,13 @@ function MediaInfoPanel({ info }: { info: NonNullable<SelectedMediaInfo> }) {
 function FrameCodexAction({
   action,
   activeSkillSession,
+  isGenerating,
   onGenerate,
   onSend,
 }: {
   action: NonNullable<FrameActionState>
   activeSkillSession: ActiveSkillSession
+  isGenerating: boolean
   onGenerate: (frameId: string) => void
   onSend: (frameId: string) => void
 }) {
@@ -905,6 +927,7 @@ function FrameCodexAction({
             event.stopPropagation()
             onGenerate(action.frameId)
           }}
+          disabled={isGenerating}
           title={generateTitle}
         >
           <span className="frame-action-button__icon" aria-hidden="true">
@@ -913,7 +936,7 @@ function FrameCodexAction({
               <path d="M3.7 10.1 4.4 12l1.9.7-1.9.8-.7 1.8-.8-1.8-1.8-.8 1.8-.7.8-1.9Z" />
             </svg>
           </span>
-          <span>Generate version</span>
+          <span>{isGenerating ? 'Generating…' : 'Generate version'}</span>
         </button>
       ) : null}
     </div>
