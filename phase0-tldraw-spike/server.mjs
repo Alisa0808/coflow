@@ -693,8 +693,8 @@ async function runActiveSkillFrame(input = {}) {
 }
 
 async function createRealSkillVersionCommand(session, frameInput, frameId) {
-  const prompt = extractFramePromptText(frameInput)
   const outputMediaType = session.outputMediaType === 'video' ? 'video' : 'image'
+  const prompt = extractFramePromptText(frameInput, outputMediaType)
   const references = extractFrameReferences(frameInput)
   const generationMode = inferSkillGenerationMode(outputMediaType, references)
   const extension = outputMediaType === 'video' ? 'mp4' : 'png'
@@ -818,17 +818,54 @@ function extractFrameReferences(frameInput) {
     .filter((item) => item.localPath || item.absolutePath)
 }
 
-function extractFramePromptText(frameInput) {
-  const texts = frameInput?.summary?.annotationTexts
-  if (Array.isArray(texts) && texts.length > 0) return texts.filter(Boolean).join('\n')
-  const promptPartTexts = frameInput?.promptPart?.annotations
-  if (Array.isArray(promptPartTexts) && promptPartTexts.length > 0) {
-    return promptPartTexts
-      .map((annotation) => annotation?.text)
-      .filter(Boolean)
-      .join('\n')
+function extractFramePromptText(frameInput, outputMediaType = 'image') {
+  const annotations = Array.isArray(frameInput?.promptPart?.annotations) ? frameInput.promptPart.annotations : []
+  const texts = Array.isArray(frameInput?.summary?.annotationTexts) ? frameInput.summary.annotationTexts : []
+  const annotationTexts = annotations.map((annotation) => annotation?.text).filter(Boolean)
+  const textDirectives = (texts.length > 0 ? texts : annotationTexts).map((text) => String(text).trim()).filter(Boolean)
+  const hasSourceMedia =
+    Boolean(frameInput?.promptPart?.anchorMedia) ||
+    (Array.isArray(frameInput?.promptPart?.media) && frameInput.promptPart.media.length > 0)
+  const hasSpatialAnnotations = annotations.some((annotation) => annotation && !annotation.text)
+
+  if (!hasSourceMedia && textDirectives.length === 0) {
+    return `Generate a new version from frame "${frameInput?.summary?.frameName || frameInput?.frameId || 'Untitled frame'}".`
   }
-  return `Generate a new version from frame "${frameInput?.summary?.frameName || frameInput?.frameId || 'Untitled frame'}".`
+
+  const promptSections = []
+
+  if (hasSourceMedia) {
+    if (outputMediaType === 'video') {
+      promptSections.push(
+        [
+          'Use the source media in the selected canvas frame as the primary visual reference.',
+          'Preserve the source identity, composition, style, logos, typography, colors, and existing text unless a canvas annotation explicitly asks to change them.',
+          'Interpret arrows, boxes, drawn marks, and notes as edit instructions only; do not render those canvas annotations into the output video.',
+        ].join(' '),
+      )
+    } else {
+      promptSections.push(
+        [
+          'Edit the provided source image; do not redesign it from scratch.',
+          'Preserve the exact original layout, aspect ratio, composition, background, logos, typography style, colors, embedded images, and all existing text unless a canvas annotation explicitly asks to change a specific part.',
+          'For poster, UI, slide, or text-replacement tasks, replace only the text or region indicated by the canvas annotations and keep every other title, subtitle, logo, footer, and layout element unchanged.',
+          'Interpret arrows, boxes, drawn marks, and notes as edit instructions only; do not render those canvas annotations, red boxes, arrows, selection outlines, or UI chrome into the output image.',
+        ].join(' '),
+      )
+    }
+  }
+
+  if (textDirectives.length > 0) {
+    promptSections.push(`Canvas edit instructions:\n${textDirectives.map((text) => `- ${text}`).join('\n')}`)
+  }
+
+  if (hasSpatialAnnotations) {
+    promptSections.push(
+      'Spatial guidance: use non-text annotations such as arrows, boxes, and drawn marks to identify the target regions. Apply the requested edits to those indicated regions only.',
+    )
+  }
+
+  return promptSections.join('\n\n')
 }
 
 function normalizeSelectionSnapshot(input) {

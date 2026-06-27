@@ -129,7 +129,9 @@ test('extractFrameContext treats native text richText as frame annotation prompt
     context,
   })
 
-  assert.equal(request.instructions.prompt, 'only make her hair pink')
+  assert.match(request.instructions.prompt, /only make her hair pink/)
+  assert.match(request.instructions.prompt, /Preserve the exact original layout/)
+  assert.match(request.instructions.prompt, /do not render those canvas annotations/)
 })
 
 test('extractFrameContext includes annotations whose center is inside the frame even if bounds cross the edge', () => {
@@ -253,7 +255,9 @@ test('createProviderReadyGenerationRequest creates reference-to-video requests f
   assert.equal(request.input?.absolutePath, '/tmp/source.mp4')
   assert.equal(request.references.length, 1)
   assert.equal(request.references[0].mediaType, 'video')
-  assert.equal(request.instructions.prompt, 'Make it cinematic.')
+  assert.match(request.instructions.prompt, /Make it cinematic\./)
+  assert.match(request.instructions.prompt, /Use the source media/)
+  assert.match(request.instructions.prompt, /do not render those canvas annotations into the output video/)
 })
 
 test('createProviderReadyGenerationRequest treats image to video as reference-to-video', () => {
@@ -461,7 +465,8 @@ test('buildMockProviderJob maps references into provider inputs', () => {
 
   assert.equal(job.mode, 'reference_to_video')
   assert.equal(job.outputMediaType, 'video')
-  assert.equal(job.prompt, 'Animate gently.')
+  assert.match(job.prompt, /Animate gently\./)
+  assert.match(job.prompt, /Use the source media/)
   assert.deepEqual(job.inputs, [
     {
       mediaType: 'image',

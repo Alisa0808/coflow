@@ -80,7 +80,7 @@ export function createProviderReadyGenerationRequest(args: {
   const outputMediaType = args.outputMediaType ?? inferOutputMediaType(anchor)
   const generationMode = args.generationMode ?? inferGenerationMode(context, outputMediaType)
   const kind = inferGenerationKind(outputMediaType, anchor)
-  const prompt = buildPrompt(context, args.promptOverride)
+  const prompt = buildPrompt(context, args.promptOverride, outputMediaType)
   const references = context.media.map(toGenerationReference)
 
   return {
@@ -156,12 +156,27 @@ function toGenerationReference(media: MediaContext): GenerationReference {
   }
 }
 
-function buildPrompt(context: FrameContext, promptOverride?: string) {
+function buildPrompt(context: FrameContext, promptOverride?: string, outputMediaType: OutputMediaType = 'image') {
   const annotationTexts = context.annotations.map((annotation) => annotationToPromptLine(annotation, context.bounds)).filter(Boolean)
+  const sourceEditInstructions = context.anchorMedia
+    ? outputMediaType === 'video'
+      ? [
+          'Use the source media in the selected canvas frame as the primary visual reference.',
+          'Preserve the source identity, composition, style, logos, typography, colors, and existing text unless a canvas annotation explicitly asks to change them.',
+          'Interpret arrows, boxes, drawn marks, and notes as edit instructions only; do not render those canvas annotations into the output video.',
+        ].join(' ')
+      : [
+          'Edit the provided source image; do not redesign it from scratch.',
+          'Preserve the exact original layout, aspect ratio, composition, background, logos, typography style, colors, embedded images, and all existing text unless a canvas annotation explicitly asks to change a specific part.',
+          'For poster, UI, slide, or text-replacement tasks, replace only the text or region indicated by the canvas annotations and keep every other title, subtitle, logo, footer, and layout element unchanged.',
+          'Interpret arrows, boxes, drawn marks, and notes as edit instructions only; do not render those canvas annotations, red boxes, arrows, selection outlines, or UI chrome into the output image.',
+        ].join(' ')
+    : ''
 
-  if (promptOverride && annotationTexts.length > 0) return `${promptOverride}\n\nCanvas annotations:\n${annotationTexts.join('\n')}`
-  if (promptOverride) return promptOverride
-  if (annotationTexts.length > 0) return annotationTexts.join('\n')
+  const sections = [sourceEditInstructions, promptOverride, annotationTexts.length > 0 ? `Canvas annotations:\n${annotationTexts.join('\n')}` : ''].filter(
+    Boolean,
+  )
+  if (sections.length > 0) return sections.join('\n\n')
   return `Create a new version from frame "${context.frameName}".`
 }
 
