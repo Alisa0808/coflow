@@ -57,7 +57,7 @@ export type AtlasProviderPayload = {
   references: SeedanceReference[]
 }
 
-export function buildMockProviderJob(request: ProviderReadyGenerationRequest): ProviderJob {
+export function buildProviderJob(request: ProviderReadyGenerationRequest): ProviderJob {
   return {
     provider: request.provider,
     requestId: request.id,

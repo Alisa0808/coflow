@@ -1,4 +1,4 @@
-export function buildMockProviderJob(request) {
+export function buildProviderJob(request) {
   return {
     provider: request.provider,
     requestId: request.id,

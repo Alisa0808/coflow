@@ -3,7 +3,7 @@ import type { AnnotationContext, Bounds, FrameContext, MediaContext } from './ca
 export type OutputMediaType = 'image' | 'video'
 export type GenerationKind = 'image_edit' | 'video_edit' | 'image_generate' | 'video_generate'
 export type GenerationMode = 'text_to_image' | 'image_edit' | 'text_to_video' | 'reference_to_video'
-export type ProviderId = 'mock-provider' | 'atlas' | 'seedance' | 'kling'
+export type ProviderId = 'mock-provider' | 'codex-native' | 'Atlas Cloud' | 'atlas' | 'seedance' | 'kling'
 export type ReferenceMediaType = 'image' | 'video' | 'audio' | 'model3d' | 'text'
 export type ReferenceRole =
   | 'source'
@@ -88,7 +88,7 @@ export function createProviderReadyGenerationRequest(args: {
     createdAt: args.createdAt ?? new Date().toISOString(),
     kind,
     generationMode,
-    provider: args.provider ?? 'atlas',
+    provider: canonicalProviderId(args.provider ?? (outputMediaType === 'video' ? 'Atlas Cloud' : 'codex-native')),
     modelIntent: anchor ? 'edit_existing_media' : 'generate_from_annotations',
     frame: {
       id: context.frameId,
@@ -121,6 +121,11 @@ export function createProviderReadyGenerationRequest(args: {
       arrowShapeId,
     },
   }
+}
+
+function canonicalProviderId(provider: ProviderId): ProviderId {
+  if (provider === 'atlas') return 'Atlas Cloud'
+  return provider
 }
 
 function inferOutputMediaType(anchor?: MediaContext): OutputMediaType {
@@ -161,15 +166,14 @@ function buildPrompt(context: FrameContext, promptOverride?: string, outputMedia
   const sourceEditInstructions = context.anchorMedia
     ? outputMediaType === 'video'
       ? [
-          'Use the source media in the selected canvas frame as the primary visual reference.',
-          'Preserve the source identity, composition, style, logos, typography, colors, and existing text unless a canvas annotation explicitly asks to change them.',
-          'Interpret arrows, boxes, drawn marks, and notes as edit instructions only; do not render those canvas annotations into the output video.',
+          'Use the selected canvas media as the primary visual reference.',
+          'Apply the user request and canvas annotations as instructions.',
+          'Do not render canvas annotations, selection outlines, or editor UI into the output video unless explicitly requested.',
         ].join(' ')
       : [
-          'Edit the provided source image; do not redesign it from scratch.',
-          'Preserve the exact original layout, aspect ratio, composition, background, logos, typography style, colors, embedded images, and all existing text unless a canvas annotation explicitly asks to change a specific part.',
-          'For poster, UI, slide, or text-replacement tasks, replace only the text or region indicated by the canvas annotations and keep every other title, subtitle, logo, footer, and layout element unchanged.',
-          'Interpret arrows, boxes, drawn marks, and notes as edit instructions only; do not render those canvas annotations, red boxes, arrows, selection outlines, or UI chrome into the output image.',
+          'Use the selected canvas image as the primary visual reference.',
+          'Apply the user request and canvas annotations as instructions.',
+          'Do not render canvas annotations, red boxes, arrows, selection outlines, or editor UI into the output image unless explicitly requested.',
         ].join(' ')
     : ''
 

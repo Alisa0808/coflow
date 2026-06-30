@@ -1,6 +1,6 @@
 import type { FrameContext } from './canvasContracts'
 
-export type AgentPromptPartSource = 'codex-agent-bridge' | 'canvas-frame-action' | 'manual-read'
+export type AgentPromptPartSource = 'codex-skill' | 'canvas-frame-action' | 'manual-read'
 
 export type BoundedFrameContextPromptPart = {
   type: 'bounded_frame_context'
@@ -24,7 +24,7 @@ export type BoundedFrameContextPromptPart = {
 
 export function buildBoundedFrameContextPromptPart(
   context: FrameContext,
-  source: AgentPromptPartSource = 'codex-agent-bridge',
+  source: AgentPromptPartSource = 'codex-skill',
 ): BoundedFrameContextPromptPart {
   return {
     type: 'bounded_frame_context',
@@ -44,4 +44,3 @@ export function buildBoundedFrameContextPromptPart(
     },
   }
 }
-

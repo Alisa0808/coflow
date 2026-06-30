@@ -1,14 +1,11 @@
 {
   "mcpServers": {
-    "codex_media_canvas_phase0": {
+    "coflow": {
       "command": "node",
       "args": [
         "phase0-tldraw-spike/mcp-server.mjs"
       ],
-      "cwd": ".",
-      "env": {
-        "WORKSPACE_ROOT": "."
-      }
+      "cwd": "."
     }
   }
 }

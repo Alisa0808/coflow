@@ -3,24 +3,43 @@ import type { ProviderReadyGenerationRequest } from './generationContract'
 
 export type CanvasCommand = {
   id: string
-  type: 'canvas.create_version' | 'canvas.agent_prompt' | 'canvas.insert_media' | 'canvas.link_versions'
+  type: 'canvas.create_version' | 'canvas.insert_media' | 'canvas.link_versions'
   frameId?: string
   sourceShapeId?: string
   targetShapeId?: string
   linkType?: 'version' | 'reference' | 'derivative'
   prompt?: string
-  provider?: 'mock-provider' | 'atlas' | 'openai' | 'seedance' | 'kling'
+  provider?: 'mock-provider' | 'codex-native' | 'Atlas Cloud' | 'atlas' | 'openai' | 'seedance' | 'kling'
   outputMediaType?: 'image' | 'video'
   generationMode?: string
   mediaType?: 'image' | 'video'
   src?: string
   localPath?: string
   absolutePath?: string
+  outputWidth?: number
+  outputHeight?: number
+  generationStartedAt?: string
+  generationCompletedAt?: string
+  generationDurationMs?: number
+  providerTimings?: Record<string, unknown>
+  e2eStartedAt?: string
+  e2eCompletedAt?: string
+  e2eDurationMs?: number
+  writebackCompletedAt?: string
   title?: string
   model?: string
   status?: string
   skillName?: string
   minClientVersion?: string
+  references?: Array<{
+    shapeId?: string
+    assetId?: string
+    mediaType?: 'image' | 'video' | 'audio' | 'model3d' | 'text'
+    role?: string
+    localPath?: string
+    absolutePath?: string
+    src?: string
+  }>
 }
 
 export type ActiveSkillSession = {
@@ -34,14 +53,6 @@ export type ActiveSkillSession = {
   startedAt: string
   updatedAt: string
 } | null
-
-export type QueueAgentPromptInput = {
-  frameId?: string
-  prompt: string
-  provider?: CanvasCommand['provider']
-  outputMediaType?: CanvasCommand['outputMediaType']
-  generationMode?: string
-}
 
 export type MaterializeAssetInput = {
   shapeId: string
@@ -179,6 +190,28 @@ export async function publishSelectionSnapshot(selection: CanvasSelectionSnapsho
   })
 }
 
+export type SelectionCaptureRequest = {
+  id: string
+  at: string
+  source?: string
+}
+
+export async function fetchPendingSelectionCaptureRequests(): Promise<SelectionCaptureRequest[]> {
+  const response = await fetch('/api/selection/fresh-capture/pending')
+  const payload = (await response.json()) as { ok?: boolean; requests?: SelectionCaptureRequest[] }
+  return payload.requests ?? []
+}
+
+export async function respondToSelectionCaptureRequest(input: { requestId: string; selection: CanvasSelectionSnapshot }) {
+  const response = await fetch('/api/selection/fresh-capture/response', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  const payload = (await response.json()) as { ok?: boolean; error?: string }
+  if (!payload.ok) throw new Error(payload.error ?? 'Failed to respond to fresh canvas capture request.')
+}
+
 export async function publishCodexFrameRequest(request: CodexFrameRequestInput): Promise<CodexFrameRequest> {
   const response = await fetch('/api/codex/frame-requests', {
     method: 'POST',
@@ -224,17 +257,6 @@ export async function fetchPendingCommands(type?: CanvasCommand['type'], clientV
   return payload.commands ?? []
 }
 
-export async function queueAgentPrompt(input: QueueAgentPromptInput): Promise<CanvasCommand> {
-  const response = await fetch('/api/agent/prompt', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(input),
-  })
-  const payload = (await response.json()) as { ok: boolean; command?: CanvasCommand; error?: string }
-  if (!payload.ok || !payload.command) throw new Error(payload.error ?? 'Failed to queue agent prompt.')
-  return payload.command
-}
-
 export async function loadActiveSkillSession(): Promise<ActiveSkillSession> {
   const response = await fetch('/api/active-skill/session')
   const payload = (await response.json()) as { ok: boolean; session?: ActiveSkillSession; error?: string }
@@ -242,7 +264,7 @@ export async function loadActiveSkillSession(): Promise<ActiveSkillSession> {
   return payload.session ?? null
 }
 
-export async function runActiveSkillFrame(input: { frameId: string; frameRequestId?: string }): Promise<CanvasCommand> {
+export async function runActiveSkillFrame(input: { frameId: string; frameRequestId?: string; e2eStartedAt?: string }): Promise<CanvasCommand> {
   const response = await fetch('/api/active-skill/run-frame', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

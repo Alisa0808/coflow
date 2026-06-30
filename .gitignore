@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 !.env.local.example
+.coflow/
 .codex-media-canvas/
 .ai-canvas/
 ai-canvas/

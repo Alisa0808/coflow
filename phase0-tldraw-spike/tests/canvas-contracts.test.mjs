@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { buildBoundedFrameContextPromptPart } from '../dist-contracts/agentPromptParts.js'
-import { extractFrameContext, createVersionPlacement, richTextToPlainText } from '../dist-contracts/canvasContracts.js'
+import {
+  createGenerationContextFromSelection,
+  extractFrameContext,
+  createVersionPlacement,
+  richTextToPlainText,
+} from '../dist-contracts/canvasContracts.js'
 import { createProviderReadyGenerationRequest } from '../dist-contracts/generationContract.js'
 import { GenerateMediaActionUtil } from '../dist-contracts/generateMediaActionUtil.js'
 import { createGenerateMediaAction, createGenerationRequestFromGenerateMediaAction } from '../dist-contracts/mediaActionContract.js'
-import { buildAtlasProviderPayload, buildKlingProviderPayload, buildMockProviderJob, buildSeedanceProviderPayload } from '../dist-contracts/providerAdapter.js'
+import { buildAtlasProviderPayload, buildKlingProviderPayload, buildProviderJob, buildSeedanceProviderPayload } from '../dist-contracts/providerAdapter.js'
 
 test('extractFrameContext returns only shapes inside the task frame', () => {
   const context = extractFrameContext(
@@ -21,7 +26,7 @@ test('extractFrameContext returns only shapes inside the task frame', () => {
           h: 180,
           assetId: 'asset:source',
           versionId: 'version:source-v1',
-          localPath: '.codex-media-canvas/assets/images/source.png',
+          localPath: '.coflow/assets/images/source.png',
           provider: 'imported',
         },
       },
@@ -125,13 +130,94 @@ test('extractFrameContext treats native text richText as frame annotation prompt
     createdAt: '2026-06-26T00:00:00.000Z',
     childShapeId: 'shape:child',
     arrowShapeId: 'shape:arrow',
-    outputLocalPath: '.codex-media-canvas/assets/images/output.svg',
+    outputLocalPath: '.coflow/assets/images/output.svg',
     context,
   })
 
   assert.match(request.instructions.prompt, /only make her hair pink/)
-  assert.match(request.instructions.prompt, /Preserve the exact original layout/)
-  assert.match(request.instructions.prompt, /do not render those canvas annotations/)
+  assert.match(request.instructions.prompt, /Use the selected canvas image/)
+  assert.match(request.instructions.prompt, /Do not render canvas annotations/)
+})
+
+test('createGenerationContextFromSelection uses selected objects when no frame is active', () => {
+  const context = createGenerationContextFromSelection({
+    version: 1,
+    selectedIds: ['shape:image', 'shape:note'],
+    selectedItems: [
+      {
+        id: 'shape:image',
+        kind: 'image',
+        canvasType: 'image',
+        bounds: { x: 100, y: 120, w: 320, h: 240 },
+        asset: {
+          assetId: 'asset:image',
+          mediaType: 'image',
+          mimeType: 'image/png',
+          localPath: '.coflow/assets/images/source.png',
+          absolutePath: '/tmp/source.png',
+        },
+      },
+      {
+        id: 'shape:note',
+        kind: 'note',
+        canvasType: 'note',
+        bounds: { x: 460, y: 150, w: 160, h: 120 },
+        text: 'make the right eye green',
+      },
+    ],
+    updatedAt: '2026-06-28T00:00:00.000Z',
+  })
+
+  assert.equal(context.scope, 'selection')
+  assert.equal(context.frameId, 'selection:current')
+  assert.deepEqual(context.sourceItemIds, ['shape:image', 'shape:note'])
+  assert.equal(context.anchorMedia?.shapeId, 'shape:image')
+  assert.equal(context.anchorMedia?.localPath, '.coflow/assets/images/source.png')
+  assert.equal(context.annotations[0].text, 'make the right eye green')
+  assert.deepEqual(context.bounds, { x: 100, y: 120, w: 520, h: 240 })
+
+  const request = createProviderReadyGenerationRequest({
+    createdAt: '2026-06-28T00:00:00.000Z',
+    childShapeId: 'shape:child',
+    arrowShapeId: 'shape:arrow',
+    outputLocalPath: '.coflow/assets/images/output.png',
+    context,
+  })
+
+  assert.equal(request.kind, 'image_edit')
+  assert.match(request.instructions.prompt, /make the right eye green/)
+})
+
+test('createGenerationContextFromSelection falls back to visible viewport items', () => {
+  const context = createGenerationContextFromSelection({
+    version: 1,
+    selectedIds: [],
+    selectedItems: [],
+    viewport: {
+      bounds: { x: 0, y: 0, w: 1000, h: 700 },
+      camera: { x: 0, y: 0, z: 1 },
+      items: [
+        {
+          id: 'shape:visible-image',
+          kind: 'image',
+          canvasType: 'image',
+          bounds: { x: 100, y: 100, w: 200, h: 200 },
+          asset: {
+            assetId: 'asset:visible-image',
+            mediaType: 'image',
+            mimeType: 'image/png',
+            localPath: '.coflow/assets/images/visible.png',
+          },
+        },
+      ],
+    },
+    updatedAt: '2026-06-28T00:00:00.000Z',
+  })
+
+  assert.equal(context.scope, 'viewport')
+  assert.equal(context.frameId, 'viewport:current')
+  assert.equal(context.anchorMedia?.assetId, 'asset:visible-image')
+  assert.deepEqual(context.bounds, { x: 100, y: 100, w: 200, h: 200 })
 })
 
 test('extractFrameContext includes annotations whose center is inside the frame even if bounds cross the edge', () => {
@@ -173,7 +259,7 @@ test('createProviderReadyGenerationRequest summarizes non-text geometric annotat
     createdAt: '2026-06-26T00:00:00.000Z',
     childShapeId: 'shape:child',
     arrowShapeId: 'shape:arrow',
-    outputLocalPath: '.codex-media-canvas/assets/images/output.svg',
+    outputLocalPath: '.coflow/assets/images/output.svg',
     context: {
       frameId: 'shape:frame',
       frameName: 'Box-only frame',
@@ -183,7 +269,7 @@ test('createProviderReadyGenerationRequest summarizes non-text geometric annotat
         shapeType: 'image',
         assetId: 'asset:image',
         versionId: 'shape:image:v1',
-        localPath: '.codex-media-canvas/assets/images/source.png',
+        localPath: '.coflow/assets/images/source.png',
         bounds: { x: 80, y: 80, w: 320, h: 360 },
       },
       media: [],
@@ -202,6 +288,8 @@ test('createVersionPlacement puts child to the right and points lineage arrow to
   assert.equal(placement.childBounds.y, 20)
   assert.equal(placement.lineageArrow.start.x, 326)
   assert.equal(placement.lineageArrow.end.x, 390)
+  assert.deepEqual(placement.lineageArrow.startAnchor, { x: 1, y: 0.5 })
+  assert.deepEqual(placement.lineageArrow.endAnchor, { x: 0, y: 0.5 })
 })
 
 test('createVersionPlacement avoids occupied objects to the right of the frame', () => {
@@ -211,8 +299,12 @@ test('createVersionPlacement avoids occupied objects to the right of the frame',
     [{ x: 390, y: 0, w: 380, h: 260 }],
   )
 
-  assert.equal(placement.childBounds.x, 406)
-  assert.equal(placement.childBounds.y, 476)
+  assert.equal(placement.childBounds.x, 10)
+  assert.equal(placement.childBounds.y, 316)
+  assert.deepEqual(placement.lineageArrow.start, { x: 160, y: 236 })
+  assert.deepEqual(placement.lineageArrow.end, { x: 170, y: 300 })
+  assert.deepEqual(placement.lineageArrow.startAnchor, { x: 0.5, y: 1 })
+  assert.deepEqual(placement.lineageArrow.endAnchor, { x: 0.5, y: 0 })
 })
 
 test('createProviderReadyGenerationRequest creates reference-to-video requests for video anchors', () => {
@@ -220,7 +312,7 @@ test('createProviderReadyGenerationRequest creates reference-to-video requests f
     createdAt: '2026-06-26T00:00:00.000Z',
     childShapeId: 'shape:child',
     arrowShapeId: 'shape:arrow',
-    outputLocalPath: '.codex-media-canvas/assets/videos/output.mp4',
+    outputLocalPath: '.coflow/assets/videos/output.mp4',
     context: {
       frameId: 'shape:frame',
       frameName: 'Video edit frame',
@@ -230,7 +322,7 @@ test('createProviderReadyGenerationRequest creates reference-to-video requests f
         shapeType: 'video',
         assetId: 'asset:video',
         versionId: 'shape:video:v1',
-        localPath: '.codex-media-canvas/assets/videos/source.mp4',
+        localPath: '.coflow/assets/videos/source.mp4',
         absolutePath: '/tmp/source.mp4',
         bounds: { x: 0, y: 0, w: 1280, h: 720 },
       },
@@ -240,7 +332,7 @@ test('createProviderReadyGenerationRequest creates reference-to-video requests f
           shapeType: 'video',
           assetId: 'asset:video',
           versionId: 'shape:video:v1',
-          localPath: '.codex-media-canvas/assets/videos/source.mp4',
+          localPath: '.coflow/assets/videos/source.mp4',
           absolutePath: '/tmp/source.mp4',
           bounds: { x: 0, y: 0, w: 1280, h: 720 },
         },
@@ -256,8 +348,8 @@ test('createProviderReadyGenerationRequest creates reference-to-video requests f
   assert.equal(request.references.length, 1)
   assert.equal(request.references[0].mediaType, 'video')
   assert.match(request.instructions.prompt, /Make it cinematic\./)
-  assert.match(request.instructions.prompt, /Use the source media/)
-  assert.match(request.instructions.prompt, /do not render those canvas annotations into the output video/)
+  assert.match(request.instructions.prompt, /Use the selected canvas media/)
+  assert.match(request.instructions.prompt, /Do not render canvas annotations/)
 })
 
 test('createProviderReadyGenerationRequest treats image to video as reference-to-video', () => {
@@ -265,7 +357,7 @@ test('createProviderReadyGenerationRequest treats image to video as reference-to
     createdAt: '2026-06-26T00:00:00.000Z',
     childShapeId: 'shape:child',
     arrowShapeId: 'shape:arrow',
-    outputLocalPath: '.codex-media-canvas/assets/videos/output.mp4',
+    outputLocalPath: '.coflow/assets/videos/output.mp4',
     outputMediaType: 'video',
     context: {
       frameId: 'shape:frame',
@@ -276,7 +368,7 @@ test('createProviderReadyGenerationRequest treats image to video as reference-to
         shapeType: 'image',
         assetId: 'asset:image',
         versionId: 'shape:image:v1',
-        localPath: '.codex-media-canvas/assets/images/source.png',
+        localPath: '.coflow/assets/images/source.png',
         absolutePath: '/tmp/source.png',
         bounds: { x: 0, y: 0, w: 1024, h: 768 },
       },
@@ -286,7 +378,7 @@ test('createProviderReadyGenerationRequest treats image to video as reference-to
           shapeType: 'image',
           assetId: 'asset:image',
           versionId: 'shape:image:v1',
-          localPath: '.codex-media-canvas/assets/images/source.png',
+          localPath: '.coflow/assets/images/source.png',
           absolutePath: '/tmp/source.png',
           bounds: { x: 0, y: 0, w: 1024, h: 768 },
         },
@@ -307,7 +399,7 @@ test('createProviderReadyGenerationRequest preserves Codex prompt while keeping 
     createdAt: '2026-06-26T00:00:00.000Z',
     childShapeId: 'shape:child',
     arrowShapeId: 'shape:arrow',
-    outputLocalPath: '.codex-media-canvas/assets/images/output.svg',
+    outputLocalPath: '.coflow/assets/images/output.svg',
     promptOverride: 'Make this suitable for a premium launch hero.',
     context: {
       frameId: 'shape:frame',
@@ -318,7 +410,7 @@ test('createProviderReadyGenerationRequest preserves Codex prompt while keeping 
         shapeType: 'image',
         assetId: 'asset:image',
         versionId: 'shape:image:v1',
-        localPath: '.codex-media-canvas/assets/images/source.png',
+        localPath: '.coflow/assets/images/source.png',
         bounds: { x: 0, y: 0, w: 1024, h: 768 },
       },
       media: [],
@@ -348,7 +440,7 @@ test('generate-media action converts bounded frame prompt part into provider-rea
       shapeType: 'image',
       assetId: 'asset:image',
       versionId: 'shape:image:v1',
-      localPath: '.codex-media-canvas/assets/images/source.png',
+      localPath: '.coflow/assets/images/source.png',
       absolutePath: '/tmp/source.png',
       bounds: { x: 0, y: 0, w: 1024, h: 768 },
     },
@@ -358,23 +450,23 @@ test('generate-media action converts bounded frame prompt part into provider-rea
         shapeType: 'image',
         assetId: 'asset:image',
         versionId: 'shape:image:v1',
-        localPath: '.codex-media-canvas/assets/images/source.png',
+        localPath: '.coflow/assets/images/source.png',
         absolutePath: '/tmp/source.png',
         bounds: { x: 0, y: 0, w: 1024, h: 768 },
       },
     ],
     annotations: [{ shapeId: 'shape:note', type: 'note', text: 'Make the edge cleaner.', bounds: { x: 40, y: 40, w: 160, h: 120 } }],
   }
-  const promptPart = buildBoundedFrameContextPromptPart(frameContext, 'codex-agent-bridge')
+  const promptPart = buildBoundedFrameContextPromptPart(frameContext, 'codex-skill')
   const action = createGenerateMediaAction({
     createdAt: 1782452071363,
-    source: 'codex-agent-bridge',
+    source: 'codex-skill',
     prompt: 'Create a polished product version.',
     frameContext: promptPart,
     outputMediaType: 'image',
     childShapeId: 'shape:child',
     arrowShapeId: 'shape:arrow',
-    outputLocalPath: '.codex-media-canvas/assets/images/output.svg',
+    outputLocalPath: '.coflow/assets/images/output.svg',
   })
   const request = createGenerationRequestFromGenerateMediaAction(action)
 
@@ -382,12 +474,12 @@ test('generate-media action converts bounded frame prompt part into provider-rea
   assert.equal(promptPart.summary.mediaCount, 1)
   assert.equal(action.type, 'generate-media')
   assert.equal(action.id, 'action:generate-media:1782452071363')
-  assert.equal(action.skillName, 'codex-media-generation')
-  assert.equal(action.providerPolicy.preferredProvider, 'atlas')
+  assert.equal(action.skillName, 'coflow-generation')
+  assert.equal(action.providerPolicy.preferredProvider, 'codex-native')
   assert.deepEqual(action.providerPolicy.fallbackProviders, [])
   assert.equal(action.providerPolicy.allowMockFallback, false)
   assert.equal(request.kind, 'image_edit')
-  assert.equal(request.provider, 'atlas')
+  assert.equal(request.provider, 'codex-native')
   assert.equal(request.canvasWriteback.childShapeId, 'shape:child')
   assert.match(request.instructions.prompt, /Create a polished product version/)
   assert.match(request.instructions.prompt, /Make the edge cleaner/)
@@ -396,16 +488,16 @@ test('generate-media action converts bounded frame prompt part into provider-rea
 test('generate-media action util applies provider policy to provider-ready request', () => {
   const frameContext = {
     frameId: 'shape:frame',
-    frameName: 'Atlas action frame',
+    frameName: 'Atlas Cloud action frame',
     bounds: { x: 0, y: 0, w: 1024, h: 768 },
     anchorMedia: undefined,
     media: [],
     annotations: [{ shapeId: 'shape:note', type: 'note', text: 'Generate a cinematic clip.', bounds: { x: 40, y: 40, w: 160, h: 120 } }],
   }
-  const promptPart = buildBoundedFrameContextPromptPart(frameContext, 'codex-agent-bridge')
+  const promptPart = buildBoundedFrameContextPromptPart(frameContext, 'codex-skill')
   const action = GenerateMediaActionUtil.create({
     createdAt: 1782452071999,
-    source: 'codex-agent-bridge',
+    source: 'codex-skill',
     provider: 'atlas',
     prompt: 'Create a short product launch video.',
     frameContext: promptPart,
@@ -413,25 +505,25 @@ test('generate-media action util applies provider policy to provider-ready reque
     generationMode: 'text_to_video',
     childShapeId: 'shape:child',
     arrowShapeId: 'shape:arrow',
-    outputLocalPath: '.codex-media-canvas/assets/videos/output.mp4',
+    outputLocalPath: '.coflow/assets/videos/output.mp4',
   })
   const request = GenerateMediaActionUtil.toGenerationRequest(action)
 
-  assert.equal(action.providerPolicy.preferredProvider, 'atlas')
+  assert.equal(action.providerPolicy.preferredProvider, 'Atlas Cloud')
   assert.deepEqual(action.providerPolicy.fallbackProviders, [])
   assert.equal(action.providerPolicy.allowMockFallback, false)
-  assert.equal(request.provider, 'atlas')
+  assert.equal(request.provider, 'Atlas Cloud')
   assert.equal(request.kind, 'video_generate')
   assert.equal(request.generationMode, 'text_to_video')
   assert.equal(request.output.mediaType, 'video')
 })
 
-test('buildMockProviderJob maps references into provider inputs', () => {
+test('buildProviderJob maps references into provider inputs', () => {
   const request = createProviderReadyGenerationRequest({
     createdAt: '2026-06-26T00:00:00.000Z',
     childShapeId: 'shape:child',
     arrowShapeId: 'shape:arrow',
-    outputLocalPath: '.codex-media-canvas/assets/videos/output.mp4',
+    outputLocalPath: '.coflow/assets/videos/output.mp4',
     outputMediaType: 'video',
     context: {
       frameId: 'shape:frame',
@@ -442,7 +534,7 @@ test('buildMockProviderJob maps references into provider inputs', () => {
         shapeType: 'image',
         assetId: 'asset:image',
         versionId: 'shape:image:v1',
-        localPath: '.codex-media-canvas/assets/images/source.png',
+        localPath: '.coflow/assets/images/source.png',
         absolutePath: '/tmp/source.png',
         bounds: { x: 0, y: 0, w: 1024, h: 768 },
       },
@@ -452,7 +544,7 @@ test('buildMockProviderJob maps references into provider inputs', () => {
           shapeType: 'image',
           assetId: 'asset:image',
           versionId: 'shape:image:v1',
-          localPath: '.codex-media-canvas/assets/images/source.png',
+          localPath: '.coflow/assets/images/source.png',
           absolutePath: '/tmp/source.png',
           bounds: { x: 0, y: 0, w: 1024, h: 768 },
         },
@@ -461,17 +553,17 @@ test('buildMockProviderJob maps references into provider inputs', () => {
     },
   })
 
-  const job = buildMockProviderJob(request)
+  const job = buildProviderJob(request)
 
   assert.equal(job.mode, 'reference_to_video')
   assert.equal(job.outputMediaType, 'video')
   assert.match(job.prompt, /Animate gently\./)
-  assert.match(job.prompt, /Use the source media/)
+  assert.match(job.prompt, /Use the selected canvas media/)
   assert.deepEqual(job.inputs, [
     {
       mediaType: 'image',
       role: 'source',
-      localPath: '.codex-media-canvas/assets/images/source.png',
+      localPath: '.coflow/assets/images/source.png',
       absolutePath: '/tmp/source.png',
     },
   ])

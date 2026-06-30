@@ -11,8 +11,8 @@ export type ProviderPolicy = {
 export type GenerateMediaAction = {
   type: 'generate-media'
   id: string
-  skillName: 'codex-media-generation'
-  source: 'codex-agent-bridge' | 'canvas-frame-action'
+  skillName: 'coflow-generation'
+  source: 'codex-skill' | 'canvas-frame-action'
   prompt?: string
   providerPolicy: ProviderPolicy
   frameContext: BoundedFrameContextPromptPart
@@ -42,11 +42,13 @@ export function createGenerateMediaAction(args: {
   outputAbsolutePath?: string
   createdAt?: number
 }): GenerateMediaAction {
-  const preferredProvider = args.provider ?? args.providerPolicy?.preferredProvider ?? 'atlas'
+  const preferredProvider = canonicalProviderId(
+    args.provider ?? args.providerPolicy?.preferredProvider ?? (args.outputMediaType === 'video' ? 'Atlas Cloud' : 'codex-native'),
+  )
   return {
     type: 'generate-media',
     id: `action:generate-media:${args.createdAt ?? Date.now()}`,
-    skillName: 'codex-media-generation',
+    skillName: 'coflow-generation',
     source: args.source,
     prompt: args.prompt,
     providerPolicy: {
@@ -66,6 +68,11 @@ export function createGenerateMediaAction(args: {
       absolutePath: args.outputAbsolutePath,
     },
   }
+}
+
+function canonicalProviderId(provider: ProviderId): ProviderId {
+  if (provider === 'atlas') return 'Atlas Cloud'
+  return provider
 }
 
 export function createGenerationRequestFromGenerateMediaAction(action: GenerateMediaAction): ProviderReadyGenerationRequest {

@@ -8,13 +8,32 @@ const DEFAULT_BASE_URL = 'https://api.atlascloud.ai/api/v1'
 const execFileAsync = promisify(execFile)
 
 export async function runAtlasProvider(payload, options = {}) {
+  const startedAt = new Date()
+  const startedMs = Date.now()
+  const timings = {
+    startedAt: startedAt.toISOString(),
+    uploadStartedAt: undefined,
+    uploadCompletedAt: undefined,
+    uploadDurationMs: 0,
+    submitStartedAt: undefined,
+    submitCompletedAt: undefined,
+    submitDurationMs: 0,
+    pollStartedAt: undefined,
+    pollCompletedAt: undefined,
+    pollDurationMs: 0,
+    pollAttempts: 0,
+    completedAt: undefined,
+    totalDurationMs: 0,
+  }
   const env = options.env ?? process.env
   const apiKey = env.ATLASCLOUD_API_KEY || env.ATLAS_PROVIDER_API_KEY || env.REAL_PROVIDER_API_KEY
   if (!apiKey) {
+    finalizeTimings(timings, startedMs)
     return {
       status: 'skipped',
-      provider: 'atlas',
+      provider: 'Atlas Cloud',
       endpointConfigured: false,
+      timings,
       reason: 'ATLASCLOUD_API_KEY is not configured.',
     }
   }
@@ -22,7 +41,12 @@ export async function runAtlasProvider(payload, options = {}) {
   const baseUrl = env.ATLASCLOUD_API_BASE_URL || DEFAULT_BASE_URL
   const outputType = payload.output?.type === 'video' ? 'video' : 'image'
   const prompt = payload.prompt || ''
+  const uploadStartedMs = Date.now()
+  timings.uploadStartedAt = new Date(uploadStartedMs).toISOString()
   const uploadedReferences = await uploadReferences(payload.references ?? [], { apiKey, baseUrl })
+  const uploadCompletedMs = Date.now()
+  timings.uploadCompletedAt = new Date(uploadCompletedMs).toISOString()
+  timings.uploadDurationMs = uploadCompletedMs - uploadStartedMs
   const generationPayload = buildAtlasGenerationPayload(payload, {
     outputType,
     prompt,
@@ -31,6 +55,8 @@ export async function runAtlasProvider(payload, options = {}) {
   })
   const submitPath = outputType === 'video' ? '/model/generateVideo' : '/model/generateImage'
   const submitEndpoint = `${baseUrl}${submitPath}`
+  const submitStartedMs = Date.now()
+  timings.submitStartedAt = new Date(submitStartedMs).toISOString()
   const submitResponse = await fetch(submitEndpoint, {
     method: 'POST',
     headers: {
@@ -41,44 +67,59 @@ export async function runAtlasProvider(payload, options = {}) {
   })
   const submitText = await submitResponse.text()
   const submitBody = parseMaybeJson(submitText)
+  const submitCompletedMs = Date.now()
+  timings.submitCompletedAt = new Date(submitCompletedMs).toISOString()
+  timings.submitDurationMs = submitCompletedMs - submitStartedMs
 
   if (!submitResponse.ok || submitBody?.code >= 400) {
+    finalizeTimings(timings, startedMs)
     return {
       status: 'failed',
-      provider: 'atlas',
+      provider: 'Atlas Cloud',
       endpointConfigured: true,
       endpoint: submitEndpoint,
       httpStatus: submitResponse.status,
       request: generationPayload,
       uploadedReferences,
+      timings,
       body: submitBody,
     }
   }
 
   const predictionId = submitBody?.data?.id || submitBody?.id
   if (!predictionId) {
+    finalizeTimings(timings, startedMs)
     return {
       status: 'failed',
-      provider: 'atlas',
+      provider: 'Atlas Cloud',
       endpointConfigured: true,
       endpoint: submitEndpoint,
       request: generationPayload,
       uploadedReferences,
+      timings,
       body: submitBody,
-      error: 'Atlas response did not include a prediction id.',
+      error: 'Atlas Cloud response did not include a prediction id.',
     }
   }
 
+  const pollStartedMs = Date.now()
+  timings.pollStartedAt = new Date(pollStartedMs).toISOString()
   const pollResult = await pollPrediction(predictionId, {
     apiKey,
     baseUrl,
+    outputType,
     attempts: Number(env.ATLAS_POLL_ATTEMPTS || (outputType === 'video' ? 160 : 100)),
-    intervalMs: Number(env.ATLAS_POLL_INTERVAL_MS || 3000),
+    intervalMs: Number(env.ATLAS_POLL_INTERVAL_MS || 2000),
   })
+  const pollCompletedMs = Date.now()
+  timings.pollCompletedAt = new Date(pollCompletedMs).toISOString()
+  timings.pollDurationMs = pollCompletedMs - pollStartedMs
+  timings.pollAttempts = pollResult.attempts ?? 0
+  finalizeTimings(timings, startedMs)
 
   return {
     status: pollResult.status,
-    provider: 'atlas',
+    provider: 'Atlas Cloud',
     endpointConfigured: true,
     endpoint: submitEndpoint,
     predictionId,
@@ -86,6 +127,7 @@ export async function runAtlasProvider(payload, options = {}) {
     uploadedReferences,
     submit: submitBody,
     poll: pollResult,
+    timings,
     outputs: pollResult.outputs,
     outputUrl: pollResult.outputs?.[0],
   }
@@ -111,28 +153,74 @@ function buildAtlasGenerationPayload(payload, { outputType, prompt, uploadedRefe
 
   if (outputType === 'video') {
     request.duration = Number(env.ATLASCLOUD_VIDEO_DURATION || 5)
-    request.aspect_ratio = env.ATLASCLOUD_VIDEO_ASPECT_RATIO || '16:9'
+    request.resolution = env.ATLASCLOUD_VIDEO_RESOLUTION || '720p'
+    request.ratio = resolveAtlasVideoRatio({ payload, prompt, env })
+    request.bitrate_mode = env.ATLASCLOUD_VIDEO_BITRATE_MODE || 'standard'
+    request.generate_audio = env.ATLASCLOUD_VIDEO_AUDIO !== 'false'
+    request.watermark = env.ATLASCLOUD_VIDEO_WATERMARK === 'true'
+    request.return_last_frame = env.ATLASCLOUD_VIDEO_RETURN_LAST_FRAME === 'true'
   } else {
-    request.image_size = env.ATLASCLOUD_IMAGE_SIZE || '1024x1024'
+    request.size = env.ATLASCLOUD_IMAGE_SIZE || '1024x1024'
   }
 
   if (hasReference) {
     if (outputType === 'image') {
-      request.image = uploadedReferences[0].download_url
+      request.images = uploadedReferences
+        .filter((reference) => reference.type === 'image')
+        .map((reference) => reference.download_url)
+        .filter(Boolean)
     } else {
-      request.image_url = uploadedReferences[0].download_url
+      const imageUrls = uploadedReferences
+        .filter((reference) => reference.type === 'image')
+        .map((reference) => reference.download_url)
+        .filter(Boolean)
+      const videoUrls = uploadedReferences
+        .filter((reference) => reference.type === 'video')
+        .map((reference) => reference.download_url)
+        .filter(Boolean)
+      const audioUrls = uploadedReferences
+        .filter((reference) => reference.type === 'audio')
+        .map((reference) => reference.download_url)
+        .filter(Boolean)
+
+      if (imageUrls.length > 0) request.reference_images = imageUrls
+      if (videoUrls.length > 0) request.reference_videos = videoUrls
+      if (audioUrls.length > 0) request.reference_audios = audioUrls
     }
   }
 
   return request
 }
 
+function resolveAtlasVideoRatio({ payload, prompt, env }) {
+  const promptRatio = ratioFromPrompt(prompt)
+  if (promptRatio) return `${promptRatio.w}:${promptRatio.h}`
+
+  return 'adaptive'
+}
+
+function ratioFromPrompt(prompt) {
+  const text = String(prompt || '').toLowerCase()
+  const explicit = text.match(/(?:^|[^\d])(\d{1,2})\s*[:：x×]\s*(\d{1,2})(?:[^\d]|$)/)
+  if (explicit) {
+    const w = Number(explicit[1])
+    const h = Number(explicit[2])
+    if (w > 0 && h > 0) return { w, h }
+  }
+
+  if (/(竖屏|竖版|portrait|vertical|9\s*[:：x×]\s*16)/i.test(text)) return { w: 9, h: 16 }
+  if (/(横屏|横版|landscape|horizontal|16\s*[:：x×]\s*9)/i.test(text)) return { w: 16, h: 9 }
+  if (/(正方形|方图|square|1\s*[:：x×]\s*1)/i.test(text)) return { w: 1, h: 1 }
+
+  return undefined
+}
+
 function buildImageEditPrompt(prompt) {
   const trimmedPrompt = String(prompt || '').trim()
   return [
-    'Edit the provided source image. Preserve the exact original subject, identity, pose, composition, medium, and visual style unless the canvas annotations explicitly ask to change them.',
-    'If the source is an illustration, keep it as an illustration. If it is a product photo, keep it as a product photo. Never replace the source with a new unrelated person, object, product, web page, or scene.',
-    'Apply only the requested canvas annotations and user instructions. Do not replace the image with a new unrelated product, web page, scene, or layout.',
+    'Use the provided source image as the primary visual reference.',
+    'Apply only the requested user instructions and canvas annotations.',
+    'Do not render canvas arrows, boxes, notes, selection outlines, or editor UI unless explicitly requested.',
     '',
     trimmedPrompt || 'Create a faithful revised version from the selected frame.',
   ].join('\n')
@@ -165,7 +253,7 @@ async function uploadReferences(references, { apiKey, baseUrl }) {
       const text = await response.text()
       const body = parseMaybeJson(text)
       if (!response.ok || body?.code >= 400) {
-        throw new Error(`Atlas upload failed: ${response.status} ${text}`)
+        throw new Error(`Atlas Cloud upload failed: ${response.status} ${text}`)
       }
       uploaded.push({
         ...reference,
@@ -208,7 +296,7 @@ async function prepareReferenceUploadFile(localPath) {
     }
   } catch (error) {
     await rm(tempRoot, { recursive: true, force: true })
-    throw new Error(`Atlas reference normalization failed for AVIF input: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`Atlas Cloud reference normalization failed for AVIF input: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -227,55 +315,74 @@ function mimeTypeFromFileName(fileName) {
   return 'application/octet-stream'
 }
 
-async function pollPrediction(predictionId, { apiKey, baseUrl, attempts, intervalMs }) {
+async function pollPrediction(predictionId, { apiKey, baseUrl, outputType, attempts, intervalMs }) {
   let latest = null
+  const pollPaths = outputType === 'image' ? ['/model/prediction', '/model/result'] : ['/model/prediction']
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) await wait(intervalMs)
-    const endpoint = `${baseUrl}/model/prediction/${predictionId}`
-    const response = await fetch(endpoint, {
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-      },
-    })
-    const text = await response.text()
-    const body = parseMaybeJson(text)
-    if (!response.ok || body?.code >= 400) {
-      return {
-        status: 'failed',
-        endpoint,
-        httpStatus: response.status,
-        body,
+
+    let lastFailure = null
+    for (const pollPath of pollPaths) {
+      const endpoint = `${baseUrl}${pollPath}/${predictionId}`
+      const response = await fetch(endpoint, {
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+        },
+      })
+      const text = await response.text()
+      const body = parseMaybeJson(text)
+      if (!response.ok || body?.code >= 400) {
+        lastFailure = {
+          status: 'failed',
+          endpoint,
+          httpStatus: response.status,
+          body,
+        }
+        continue
+      }
+
+      const data = body?.data ?? body
+      latest = data
+      const status = data?.status || 'unknown'
+      if (status === 'completed' || status === 'succeeded') {
+        return {
+          status: 'succeeded',
+          attempts: attempt + 1,
+          endpoint,
+          predictionStatus: status,
+          body,
+          outputs: normalizeOutputs(data),
+        }
+      }
+      if (status === 'failed') {
+        return {
+          status: 'failed',
+          attempts: attempt + 1,
+          endpoint,
+          predictionStatus: status,
+          body,
+          error: data?.error || 'Atlas Cloud generation failed.',
+        }
       }
     }
-    const data = body?.data ?? body
-    latest = data
-    const status = data?.status || 'unknown'
-    if (status === 'completed' || status === 'succeeded') {
-      return {
-        status: 'succeeded',
-        endpoint,
-        predictionStatus: status,
-        body,
-        outputs: normalizeOutputs(data),
-      }
-    }
-    if (status === 'failed') {
-      return {
-        status: 'failed',
-        endpoint,
-        predictionStatus: status,
-        body,
-        error: data?.error || 'Atlas generation failed.',
-      }
-    }
+
+    if (!latest && lastFailure && attempt === attempts - 1) return lastFailure
   }
 
   return {
     status: 'processing',
+    attempts,
     predictionStatus: latest?.status || 'unknown',
     body: latest,
-    reason: 'Atlas prediction is still processing.',
+    reason: 'Atlas Cloud prediction is still processing.',
   }
+}
+
+function finalizeTimings(timings, startedMs) {
+  const completedMs = Date.now()
+  timings.completedAt = new Date(completedMs).toISOString()
+  timings.totalDurationMs = completedMs - startedMs
+  return timings
 }
 
 function normalizeOutputs(data) {
