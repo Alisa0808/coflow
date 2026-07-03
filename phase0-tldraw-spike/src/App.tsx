@@ -36,7 +36,6 @@ import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil } from './mediaShape'
 import {
   fetchPendingCommands,
   fetchPendingSelectionCaptureRequests,
-  loadActiveSkillSession,
   loadCanvasDocument,
   materializeAsset,
   publishCodexFrameRequest,
@@ -44,10 +43,8 @@ import {
   publishSelectionSnapshot,
   recordOperation,
   respondToSelectionCaptureRequest,
-  runActiveSkillFrame,
   saveCanvasDocument,
   saveFrameScreenshot,
-  type ActiveSkillSession,
   type CanvasCommand,
   type CodexFrameRequest,
   type FrameScreenshot,
@@ -333,11 +330,9 @@ export default function App() {
   const lastPublishedSelectionRef = useRef('')
   const [status, setStatus] = useState('')
   const [frameAction, setFrameAction] = useState<FrameActionState>(null)
-  const [activeSkillSession, setActiveSkillSession] = useState<ActiveSkillSession>(null)
   const [selectedMediaInfo, setSelectedMediaInfo] = useState<SelectedMediaInfo>(null)
   const [mediaInfoOpen, setMediaInfoOpen] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>(null)
-  const [generatingFrameIds, setGeneratingFrameIds] = useState<Set<string>>(() => new Set())
 
   function showStatus(message: string, durationMs = 3200) {
     const appWindow = editorRef.current?.getContainer().ownerDocument.defaultView ?? window
@@ -359,11 +354,8 @@ export default function App() {
           selectedMediaInfo={selectedMediaInfo}
           mediaInfoOpen={mediaInfoOpen}
           frameAction={frameAction}
-          activeSkillSession={activeSkillSession}
-          generatingFrameIds={generatingFrameIds}
           onMediaInfoToggle={() => setMediaInfoOpen((value) => !value)}
           onMediaInfoClose={() => setMediaInfoOpen(false)}
-          onGenerate={generateFrameVersion}
           onSend={sendFrameToCodex}
         />
       )
@@ -372,7 +364,7 @@ export default function App() {
     return {
       InFrontOfTheCanvas: CodexInFrontOfTheCanvas,
     }
-  }, [activeSkillSession, frameAction, generatingFrameIds, mediaInfoOpen, selectedMediaInfo])
+  }, [frameAction, mediaInfoOpen, selectedMediaInfo])
 
   function syncFloatingOverlayState(editor: Editor) {
     const nextFrameAction = getSelectedFrameAction(editor)
@@ -395,15 +387,6 @@ export default function App() {
 
   useEffect(() => {
     let stopped = false
-
-    async function pollActiveSkillSession() {
-      if (stopped) return
-      try {
-        setActiveSkillSession(await loadActiveSkillSession())
-      } catch {
-        // The local backend may still be starting; keep the canvas usable.
-      }
-    }
 
     async function pollWritebackCommands() {
       if (stopped) return
@@ -452,22 +435,17 @@ export default function App() {
     const freshSelectionInterval = window.setInterval(() => {
       void pollFreshSelectionCaptureRequests()
     }, 500)
-    const activeSkillInterval = window.setInterval(() => {
-      void pollActiveSkillSession()
-    }, 1600)
     const selectionHeartbeatInterval = window.setInterval(() => {
       const editor = editorRef.current
       if (editor) void publishCurrentSelection(editor)
     }, SELECTION_HEARTBEAT_MS)
     void pollWritebackCommands()
     void pollFreshSelectionCaptureRequests()
-    void pollActiveSkillSession()
 
     return () => {
       stopped = true
       window.clearInterval(interval)
       window.clearInterval(freshSelectionInterval)
-      window.clearInterval(activeSkillInterval)
       window.clearInterval(selectionHeartbeatInterval)
       if (statusTimeoutRef.current !== null) window.clearTimeout(statusTimeoutRef.current)
       if (selectionPublishTimeoutRef.current !== null) window.clearTimeout(selectionPublishTimeoutRef.current)
@@ -623,10 +601,7 @@ export default function App() {
     }
   }
 
-  async function publishFrameForCodex(
-    frameId: string,
-    status: 'awaiting_user_instruction' | 'ready_to_execute',
-  ): Promise<{ request: CodexFrameRequest; context: FrameContext; screenshotResult: FrameScreenshotResult } | null> {
+  async function publishFrameForCodex(frameId: string): Promise<{ request: CodexFrameRequest; context: FrameContext; screenshotResult: FrameScreenshotResult } | null> {
     const editor = editorRef.current
     if (!editor) return null
     const shapes = toCanvasShapeRecords(editor, editor.getCurrentPageShapesSorted())
@@ -649,7 +624,7 @@ export default function App() {
     const request = await publishCodexFrameRequest({
       frameId: context.frameId,
       promptPart,
-      status,
+      status: 'awaiting_user_instruction',
       summary: {
         frameName: context.frameName,
         mediaCount: context.media.length,
@@ -659,26 +634,22 @@ export default function App() {
       },
       frameScreenshot: frameScreenshot.screenshot,
       defaultInstruction:
-        status === 'ready_to_execute'
-          ? 'This frame belongs to an active CoFlow Skill session. Use the structured Frame Input as source of truth, execute the active Skill, then call canvas.insert_media or canvas.create_version to place the result back on the board.'
-          : 'Treat this as a pending Codex canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back on the board.',
+        'Treat this as a pending CoFlow canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back on the board.',
       recommendedUserPrompt:
-        status === 'ready_to_execute'
-          ? 'Generate a version from the media and annotations inside this frame using the active Skill.'
-          : 'I have sent this frame to Codex. Please tell me what you want to create or edit from this frame, or say “generate a version from these annotations”.',
+        'I have sent this frame to Codex. Please tell me what you want to create or edit from this frame, or say “generate a version from these annotations”.',
     })
     await recordOperation({
-      type: status === 'ready_to_execute' ? 'codex.frame_context_ready_to_execute' : 'codex.frame_context_sent',
+      type: 'codex.frame_context_sent',
       frameId: context.frameId,
       promptPart,
-      skillName: activeSkillSession?.skillName ?? 'coflow-generation',
+      skillName: 'coflow-context',
       promptSource: 'canvas-frame-action',
     })
     return { request, context, screenshotResult: frameScreenshot }
   }
 
   async function sendFrameToCodex(frameId: string) {
-    const published = await publishFrameForCodex(frameId, 'awaiting_user_instruction')
+    const published = await publishFrameForCodex(frameId)
     if (!published) return
 
     showStatus(
@@ -687,52 +658,6 @@ export default function App() {
         : 'Sent frame to Codex. Screenshot copy was blocked, but Codex can read the Frame Input.',
       6200,
     )
-  }
-
-  async function generateFrameVersion(frameId: string) {
-    if (!activeSkillSession?.autoRun) {
-      void sendFrameToCodex(frameId)
-      return
-    }
-
-    if (generatingFrameIds.has(frameId)) return
-    setGeneratingFrameIds((current) => new Set(current).add(frameId))
-    const e2eStartedAt = new Date().toISOString()
-    showStatus(`Generating with ${activeSkillSession.displayName}. Keep this canvas open for writeback.`, 0)
-
-    const published = await publishFrameForCodex(frameId, 'ready_to_execute')
-    if (!published) {
-      setGeneratingFrameIds((current) => {
-        const next = new Set(current)
-        next.delete(frameId)
-        return next
-      })
-      showStatus('', 1)
-      return
-    }
-
-    try {
-      await runActiveSkillFrame({
-        frameId: published.context.frameId,
-        frameRequestId: published.request.id,
-        e2eStartedAt,
-      })
-      showStatus('Generated version is ready. Placing it on canvas…', 3200)
-    } catch (error) {
-      await recordOperation({
-        type: 'active_skill.run_failed',
-        frameId: published.context.frameId,
-        skillName: activeSkillSession.skillName,
-        error: error instanceof Error ? error.message : String(error),
-      })
-      showStatus(error instanceof Error ? error.message : 'Active Skill run failed.', 6200)
-    } finally {
-      setGeneratingFrameIds((current) => {
-        const next = new Set(current)
-        next.delete(frameId)
-        return next
-      })
-    }
   }
 
   async function copyAndSaveFrameScreenshot(
@@ -1036,8 +961,6 @@ export default function App() {
           {status}
         </div>
       ) : null}
-      {activeSkillSession ? <ActiveSkillPill session={activeSkillSession} /> : null}
-
       {uploadProgress ? <UploadProgress progress={uploadProgress} /> : null}
     </div>
   )
@@ -1047,21 +970,15 @@ function CanvasFloatingOverlays({
   selectedMediaInfo,
   mediaInfoOpen,
   frameAction,
-  activeSkillSession,
-  generatingFrameIds,
   onMediaInfoToggle,
   onMediaInfoClose,
-  onGenerate,
   onSend,
 }: {
   selectedMediaInfo: SelectedMediaInfo
   mediaInfoOpen: boolean
   frameAction: FrameActionState
-  activeSkillSession: ActiveSkillSession
-  generatingFrameIds: Set<string>
   onMediaInfoToggle: () => void
   onMediaInfoClose: () => void
-  onGenerate: (frameId: string) => void
   onSend: (frameId: string) => void
 }) {
   const editor = useEditor()
@@ -1080,23 +997,10 @@ function CanvasFloatingOverlays({
       {frameAction ? (
         <FrameCodexAction
           action={frameAction}
-          activeSkillSession={activeSkillSession}
-          isGenerating={generatingFrameIds.has(frameAction.frameId)}
-          onGenerate={onGenerate}
           onSend={onSend}
         />
       ) : null}
     </>
-  )
-}
-
-function ActiveSkillPill({ session }: { session: NonNullable<ActiveSkillSession> }) {
-  return (
-    <div className="active-skill-pill" aria-live="polite">
-      <span className="active-skill-pill__dot" aria-hidden="true" />
-      <span>{session.displayName}</span>
-      <em>{session.autoRun ? 'Generate mode' : 'Context mode'}</em>
-    </div>
   )
 }
 
@@ -1326,22 +1230,14 @@ async function copyTextToClipboard(value: string, targetWindow: Window | null) {
 
 function FrameCodexAction({
   action,
-  activeSkillSession,
-  isGenerating,
-  onGenerate,
   onSend,
 }: {
   action: NonNullable<FrameActionState>
-  activeSkillSession: ActiveSkillSession
-  isGenerating: boolean
-  onGenerate: (frameId: string) => void
   onSend: (frameId: string) => void
 }) {
   const editor = useEditor()
   const toolbarRef = useRef<HTMLDivElement | null>(null)
-  const isGenerateMode = Boolean(activeSkillSession?.autoRun)
   const sendTitle = `Send ${action.frameName} context to Codex`
-  const generateTitle = `Generate a new version from ${action.frameName} using ${activeSkillSession?.displayName}`
 
   useEffect(() => {
     const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
@@ -1404,23 +1300,6 @@ function FrameCodexAction({
         <ExternalLinkActionIcon />
         <span>Send to Codex</span>
       </button>
-      {isGenerateMode ? (
-        <button
-          type="button"
-          className="codex-frame-action-button"
-          data-mode="generate"
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            onGenerate(action.frameId)
-          }}
-          disabled={isGenerating}
-          title={generateTitle}
-        >
-          <SparkleActionIcon />
-          <span>{isGenerating ? 'Generating…' : 'Generate'}</span>
-        </button>
-      ) : null}
     </div>
   )
 }
@@ -1432,17 +1311,6 @@ function ExternalLinkActionIcon() {
         <path d="M7 4.75H4.75v10.5h10.5V13" />
         <path d="M10.25 4.75h5v5" />
         <path d="m9.25 10.75 5.75-5.75" />
-      </svg>
-    </span>
-  )
-}
-
-function SparkleActionIcon() {
-  return (
-    <span className="codex-frame-action-sparkle" aria-hidden="true">
-      <svg viewBox="0 0 20 20">
-        <path d="M8.35 2.65 9.6 6.1a1.9 1.9 0 0 0 1.14 1.14l3.45 1.25-3.45 1.25A1.9 1.9 0 0 0 9.6 10.9l-1.25 3.45-1.25-3.45a1.9 1.9 0 0 0-1.14-1.14L2.5 8.5l3.46-1.25A1.9 1.9 0 0 0 7.1 6.1l1.25-3.45Z" />
-        <path d="m14.4 12.4.58 1.6c.1.28.32.5.6.6l1.6.58-1.6.58a1 1 0 0 0-.6.6l-.58 1.6-.58-1.6a1 1 0 0 0-.6-.6l-1.6-.58 1.6-.58a1 1 0 0 0 .6-.6l.58-1.6Z" />
       </svg>
     </span>
   )

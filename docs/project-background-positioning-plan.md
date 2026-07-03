@@ -321,24 +321,22 @@ User clicks Send to Codex on a frame
 
 它不是“点击后立即生成”。默认 `Send to Codex` 应该降低误触成本，避免不必要的 API / token / generation credit 消耗。
 
-但这不意味着后续永远不能出现 `Generate version`。正确语义是：
+但这不意味着后续永远不能出现低摩擦生成入口。正确语义是：
 
 - `Send to Codex` 是默认桥接入口：把 frame / selection / asset / annotation context 发送给 Codex，等待用户在 Codex 对话里补充或确认意图；
-- `Generate version` 是 active skill / auto-run 入口：当用户已经在 Codex 中显式启用了某个场景 Skill，并经过多轮对话建立了稳定任务意图后，画布可以在 frame 上额外显示一个低摩擦的一键生成按钮；
-- 例如用户已经进入 `Product Marketing Set`、`Image Edit`、`Video Ad Keyframes`、`Reference to Video` 等 session mode，之后继续用 frame 框住素材和标注，点击 `Generate version` 就可以直接沿用当前 skill、provider policy、默认模型和输出策略；
-- `Generate version` 不能回到“白板自己拼 provider payload 并调用 API”的老路。它的本质仍然是触发 active Codex skill：读取 frame input → 执行 skill → 写回 canvas；
-- `Send to Codex` 必须常驻：即使已经进入 active skill / auto-run mode，也要允许用户只把 frame 发给 Codex、继续补充指令，而不是被迫立即生成；
-- 如果没有 active skill / auto-run mode，只显示 `Send to Codex`，不能暗示会立即消耗 generation credit。
+- `Quick Edit / Generate` 是选中单张图片后的白板内快捷编辑入口：用户在白板浮层里输入短 prompt，直接做简单 image edit / upscale / remove background / cleanup / style tweak；
+- `Quick Edit / Generate` 不应该出现在 frame 上，也不处理多对象、视频、3D、复杂参考关系或需要 Codex 规划的任务；
+- frame 级一键生成后续可以回归，但不能再走 active skill session，也不能回到“白板自己拼 provider payload 并调用 API”的老路。它只能基于真实 Codex callback / task 机制：读取 frame input → Codex skill 判断 → 执行 provider/native generation → 写回 canvas；
+- `Send to Codex` 必须常驻：复杂任务需要让用户在 Codex 里补充指令，而不是被迫立即消耗 generation credit。
 
 因此按钮语义是两层：
 
 ```text
-No active skill:
-  Send to Codex -> publish context -> wait for Codex/user instruction
+Frame / bounded multi-object task:
+  Send to Codex -> publish context -> wait for Codex/user instruction -> Codex skill executes -> canvas writeback
 
-Active skill / auto-run mode:
-  Send to Codex -> publish context -> wait for Codex/user instruction
-  Generate version -> publish context -> active skill executes -> canvas writeback
+Single selected image quick edit:
+  Quick Edit / Generate -> inline prompt -> narrow provider execution -> canvas writeback
 ```
 
 Frame Input 文件是 `Send to Codex` 的附件化边界：
@@ -713,13 +711,13 @@ Generate new version from this frame
 - created time；
 - cost / latency，如可得。
 
-### 4.5 Canvas Session Mode：持续使用一个场景 Skill
+### 4.5 持续编辑流：由 Codex 会话上下文承接，不再使用 active skill session
 
 用户不应该每处理一次素材都重新选择一次 Skill，也不应该在白板里点一堆业务按钮。我们需要支持一种“持续场景模式”：
 
 > 用户在 Codex 对话中设定当前工作场景，例如“接下来这个白板都按 Product Marketing Set 来处理”。之后用户只需要继续在画布里选择素材、画标注、框 frame、点击生成；Codex 会默认沿用当前 active agent skill，直到用户切换或退出。
 
-这就是 Canvas Session Mode。
+这不是浏览器/本地服务持久化的 active skill session。它应该由 Codex 对话上下文、用户显式调用的 Skill，以及每次从画布产生的 Frame Input / selection / viewport context 共同承接。
 
 它解决三个问题：
 
@@ -730,7 +728,7 @@ Generate new version from this frame
    场景选择留在 Codex 对话里，而不是变成白板里的 Skill 面板。
 
 3. **让 frame 成为任务单元。**  
-   同一个 active skill 可以连续处理多个 frame：每个 frame 是一次局部任务，session mode 是持续上下文。
+   同一个 Codex 会话可以连续处理多个 frame：每个 frame 是一次局部任务，持续上下文由 Codex 会话和当前调用的 Skill 维护，而不是由画布保存 active session。
 
 推荐交互：
 
@@ -738,32 +736,24 @@ Generate new version from this frame
 用户：接下来用 Product Marketing Set 模式处理这个白板
 Codex：已开启 Product Marketing Set。你可以框住任意产品图和标注，我会按这个场景生成营销套图。
 
-用户在画布中框选 frame A → 点击按标注生成新版
+用户在画布中框选 frame A → 点击 Send to Codex
 Codex 读取 frame A context → 用 Product Marketing Set 生成一组图 → 回板
 
-用户继续框选 frame B → 点击按标注生成新版
+用户继续框选 frame B → 点击 Send to Codex
 Codex 沿用 Product Marketing Set → 生成下一组图 → 回板
 
 用户：切到 Video Ad Keyframes
 Codex：已切换，后续 frame 会按视频广告关键帧处理
 ```
 
-画布 UI 中最多显示一个轻量状态条：
-
-```text
-Active skill: Product Marketing Set · Provider: Auto/Atlas · Configure in Codex
-```
-
-但不要提供完整 Skill 列表、表单和参数面板。
+画布 UI 可以显示当前快捷模式或 provider 状态，但不要提供完整 Skill 列表、复杂表单和参数面板。Frame 上默认只提供 `Send to Codex`，不直接跑 provider。
 
 Phase 0.6 的实现边界：
 
-- 用 `.coflow/metadata/active-skill-session.json` 保存当前 active skill session；
-- Codex / MCP 可以激活或清除 session；
-- session 激活后，画布只显示一个轻量 active skill 状态，不显示 skill marketplace；
-- 选中 frame 后，`Send to Codex` 常驻；如果 active skill `autoRun` 开启，则额外显示 `Generate version`；
-- 点击 `Generate version` 仍然会先生成 Frame Input，再触发 active skill，而不是让白板自己拼 provider payload；
-- active skill 执行默认走真实 provider boundary，例如 Atlas 上的 GPT image 2 / Seedance 2.0；
+- 移除 `.coflow/metadata/active-skill-session.json` 和所有 active skill session 激活/清除逻辑；
+- 选中 frame 后只显示 `Send to Codex`，负责生成 Frame Input 和截图，等待 Codex/user 指令；
+- 选中单张图片时可以出现 Quick Edit / Generate 输入框，适合简单白板内改图；
+- Quick Edit 可以走真实 provider boundary，但必须是明确的单图编辑快捷路径，不得承担 frame / multi-object / video / 3D orchestration；
 - 如果 provider key 缺失或调用失败，应该明确失败，而不是插入 mock 图或 mock 视频。
 
 Skill 入口应该合并为意图型，而不是 provider mode 型：
@@ -774,23 +764,21 @@ Skill 入口应该合并为意图型，而不是 provider mode 型：
 
 用户不应该被要求理解 `text_to_image`、`image_edit`、`reference_to_video` 这类 provider mode；这些属于 skill 内部推断和 provider adapter 责任。
 
-Session Mode 需要记录：
+持续编辑流依赖：
 
-- active agent skill；
-- provider preference；
+- Codex 当前会话里的用户意图和最近 Skill 调用；
+- 每次 `Send to Codex` 产生的 Frame Input；
+- provider preference / model defaults；
 - output strategy，例如 single version / grid / storyboard；
-- last used model；
-- default placement；
 - optional brand/style context；
-- startedAt / updatedAt；
-- clear / switch / resume 行为。
+- default placement 和版本血缘写回规则。
 
 待验证问题：
 
-- Codex 会话能否稳定保持这种 mode；
+- Codex 会话能否稳定保持这种持续编辑语境；
 - 新对话或服务重启后如何 resume；
-- session mode 存在画布 metadata、Codex memory、还是两边都存；
-- 如果 frame title / 用户临时指令与 active skill 冲突，优先级如何处理。
+- 是否需要把用户主动确认的项目/品牌/风格偏好沉淀到 Codex memory 或项目配置；
+- 如果 frame title / 用户临时指令与当前对话上下文冲突，优先级如何处理。
 
 ### 4.6 官方 tldraw Agent Starter 的迁移原则：只拿 agent runtime，不改变核心需求
 

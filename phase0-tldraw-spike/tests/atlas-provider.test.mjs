@@ -349,6 +349,252 @@ test('runAtlasProvider lets explicit video ratio in prompt override source ratio
   }
 })
 
+test('runAtlasProvider derives Atlas Cloud video params from prompt text', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'atlas-video-prompt-params-test-'))
+  const sourcePath = join(tempRoot, 'source.png')
+  await writeFile(sourcePath, Buffer.from('fake-source-image'))
+  const previousFetch = globalThis.fetch
+  const submittedBodies = []
+
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith('/model/uploadMedia')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          download_url: 'https://atlas.example.test/uploaded/source.png',
+          filename: 'source.png',
+          size: 10,
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/generateVideo')) {
+      const body = JSON.parse(init.body)
+      submittedBodies.push(body)
+      assert.equal(body.ratio, '16:9')
+      assert.equal(body.duration, 6)
+      assert.equal(body.resolution, '1080p')
+      assert.equal(body.bitrate_mode, 'high')
+      assert.equal(body.generate_audio, false)
+      assert.equal(body.watermark, false)
+      assert.equal(body.return_last_frame, true)
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'video-prompt-params-prediction-123',
+          status: 'starting',
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/prediction/video-prompt-params-prediction-123')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'video-prompt-params-prediction-123',
+          status: 'completed',
+          outputs: ['https://atlas.example.test/generated/output.mp4'],
+        },
+      })
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  try {
+    await runAtlasProvider(
+      {
+        output: { type: 'video' },
+        prompt: 'Create a 16:9, 6s, 1080P video, high bitrate, no watermark, return last frame, mute.',
+        references: [{ type: 'image', role: 'source', uri: sourcePath }],
+      },
+      {
+        env: {
+          ATLASCLOUD_API_KEY: 'test-key',
+          ATLAS_POLL_INTERVAL_MS: '1',
+          ATLAS_POLL_ATTEMPTS: '1',
+        },
+      },
+    )
+
+    assert.equal(submittedBodies.length, 1)
+  } finally {
+    globalThis.fetch = previousFetch
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('runAtlasProvider maps Grok Imagine Video v1.5 image-to-video fields', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'atlas-grok-video-payload-test-'))
+  const sourcePath = join(tempRoot, 'source.png')
+  await writeFile(sourcePath, Buffer.from('fake-source-image'))
+  const previousFetch = globalThis.fetch
+  const submittedBodies = []
+
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith('/model/uploadMedia')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          download_url: 'https://atlas.example.test/uploaded/source.png',
+          filename: 'source.png',
+          size: 10,
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/generateVideo')) {
+      const body = JSON.parse(init.body)
+      submittedBodies.push(body)
+      assert.equal(body.model, 'xai/grok-imagine-video-v1.5/image-to-video')
+      assert.equal(body.image_url, 'https://atlas.example.test/uploaded/source.png')
+      assert.equal(body.aspect_ratio, '16:9')
+      assert.equal(body.image, undefined)
+      assert.equal(body.reference_images, undefined)
+      assert.equal(body.ratio, undefined)
+      assert.equal(body.duration, undefined)
+      assert.equal(body.resolution, undefined)
+      assert.equal(body.bitrate_mode, undefined)
+      assert.equal(body.generate_audio, undefined)
+      assert.equal(body.watermark, undefined)
+      assert.equal(body.return_last_frame, undefined)
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'grok-video-prediction-123',
+          status: 'starting',
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/prediction/grok-video-prediction-123')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'grok-video-prediction-123',
+          status: 'completed',
+          outputs: ['https://atlas.example.test/generated/output.mp4'],
+        },
+      })
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  try {
+    await runAtlasProvider(
+      {
+        output: { type: 'video' },
+        prompt: 'Create a 16:9 video from this image.',
+        references: [{ type: 'image', role: 'source', uri: sourcePath }],
+      },
+      {
+        env: {
+          ATLASCLOUD_API_KEY: 'test-key',
+          ATLASCLOUD_VIDEO_IMAGE_MODEL: 'xai/grok-imagine-video-v1.5/image-to-video',
+          ATLAS_POLL_INTERVAL_MS: '1',
+          ATLAS_POLL_ATTEMPTS: '1',
+        },
+      },
+    )
+
+    assert.equal(submittedBodies.length, 1)
+  } finally {
+    globalThis.fetch = previousFetch
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('runAtlasProvider lets structured providerOptions override prompt and env defaults', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'atlas-video-provider-options-test-'))
+  const sourcePath = join(tempRoot, 'source.png')
+  await writeFile(sourcePath, Buffer.from('fake-source-image'))
+  const previousFetch = globalThis.fetch
+  const submittedBodies = []
+
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith('/model/uploadMedia')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          download_url: 'https://atlas.example.test/uploaded/source.png',
+          filename: 'source.png',
+          size: 10,
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/generateVideo')) {
+      const body = JSON.parse(init.body)
+      submittedBodies.push(body)
+      assert.equal(body.ratio, '9:16')
+      assert.equal(body.duration, 8)
+      assert.equal(body.resolution, '720p')
+      assert.equal(body.bitrate_mode, 'standard')
+      assert.equal(body.generate_audio, true)
+      assert.equal(body.watermark, true)
+      assert.equal(body.return_last_frame, false)
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'video-provider-options-prediction-123',
+          status: 'starting',
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/prediction/video-provider-options-prediction-123')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'video-provider-options-prediction-123',
+          status: 'completed',
+          outputs: ['https://atlas.example.test/generated/output.mp4'],
+        },
+      })
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  try {
+    await runAtlasProvider(
+      {
+        output: { type: 'video' },
+        prompt: 'Create a 16:9, 6s, 1080P video, high bitrate, no watermark, return last frame, mute.',
+        providerOptions: {
+          ratio: '9:16',
+          duration: 8,
+          resolution: '720p',
+          bitrate_mode: 'standard',
+          generate_audio: true,
+          watermark: true,
+          return_last_frame: false,
+        },
+        references: [{ type: 'image', role: 'source', uri: sourcePath }],
+      },
+      {
+        env: {
+          ATLASCLOUD_API_KEY: 'test-key',
+          ATLASCLOUD_VIDEO_DURATION: '5',
+          ATLASCLOUD_VIDEO_RESOLUTION: '480p',
+          ATLASCLOUD_VIDEO_BITRATE_MODE: 'low',
+          ATLASCLOUD_VIDEO_AUDIO: 'false',
+          ATLASCLOUD_VIDEO_WATERMARK: 'false',
+          ATLASCLOUD_VIDEO_RETURN_LAST_FRAME: 'true',
+          ATLAS_POLL_INTERVAL_MS: '1',
+          ATLAS_POLL_ATTEMPTS: '1',
+        },
+      },
+    )
+
+    assert.equal(submittedBodies.length, 1)
+  } finally {
+    globalThis.fetch = previousFetch
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,

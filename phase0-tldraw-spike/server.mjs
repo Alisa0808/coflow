@@ -1,15 +1,10 @@
 import { createServer } from 'node:http'
-import { execFile } from 'node:child_process'
 import { cp, mkdir, readFile, stat, writeFile, appendFile, readdir, rm, rename, copyFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, normalize } from 'node:path'
-import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import { prepareProviderExecution } from './lib/provider-executor.mjs'
 import { getProviderStatus } from './lib/provider-config.mjs'
 import { buildProviderOnboarding } from './lib/provider-onboarding.mjs'
-import { getDefaultProviderForMedia, readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
-
-const execFileAsync = promisify(execFile)
+import { readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 const distRoot = join(root, 'dist')
@@ -36,7 +31,6 @@ const latestFrameInputPath = join(metadataRoot, 'latest-frame-input.json')
 const latestFrameScreenshotPath = join(metadataRoot, 'latest-frame-screenshot.json')
 const latestGenerationRequestPath = join(metadataRoot, 'latest-generation-request.json')
 const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
-const activeSkillSessionPath = join(metadataRoot, 'active-skill-session.json')
 const providerSettingsPath = join(metadataRoot, 'provider-settings.json')
 const selectionCaptureRequestsRoot = join(metadataRoot, 'selection-capture-requests')
 const selectionCaptureResponsesRoot = join(metadataRoot, 'selection-capture-responses')
@@ -215,10 +209,6 @@ const server = createServer(async (request, response) => {
       return sendJson(response, await readJsonFile(latestGenerationRequestPath, null))
     }
 
-    if (url.pathname === '/api/active-skill/session' && request.method === 'GET') {
-      return sendJson(response, { ok: true, session: await readActiveSkillSession() })
-    }
-
     if (url.pathname === '/api/provider/status' && request.method === 'GET') {
       const providerSettings = await readProviderSettings(readJsonFile, providerSettingsPath, process.env)
       return sendJson(
@@ -276,26 +266,6 @@ const server = createServer(async (request, response) => {
       })
     }
 
-    if (url.pathname === '/api/active-skill/session' && (request.method === 'PUT' || request.method === 'POST')) {
-      const body = await readJsonBody(request)
-      const session = await writeActiveSkillSession(body)
-      await appendOperation({ type: 'active_skill.session_started', session })
-      return sendJson(response, { ok: true, session })
-    }
-
-    if (url.pathname === '/api/active-skill/session' && request.method === 'DELETE') {
-      await clearActiveSkillSession()
-      await appendOperation({ type: 'active_skill.session_cleared' })
-      return sendJson(response, { ok: true, session: null })
-    }
-
-    if (url.pathname === '/api/active-skill/run-frame' && request.method === 'POST') {
-      const body = await readJsonBody(request)
-      const result = await runActiveSkillFrame(body)
-      await appendOperation({ type: 'active_skill.frame_executed', result })
-      return sendJson(response, { ok: true, ...result })
-    }
-
     if (url.pathname === '/api/codex/frame-requests' && request.method === 'POST') {
       const body = await readJsonBody(request)
       const at = new Date().toISOString()
@@ -351,19 +321,6 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/api/codex/frame-screenshots/latest' && request.method === 'GET') {
       return sendJson(response, await readJsonFile(latestFrameScreenshotPath, null))
-    }
-
-    if (url.pathname === '/api/executions/run-latest' && request.method === 'POST') {
-      const latest = await readJsonFile(latestGenerationRequestPath, null)
-      if (!latest?.request) return sendJson(response, { ok: false, error: 'No latest generation request found.' })
-      const result = await runStrictProviderExecution(latest.request)
-      await writeJson(latestExecutionResultPath, {
-        updatedAt: new Date().toISOString(),
-        source: 'phase0-tldraw-spike',
-        result,
-      })
-      await appendOperation({ type: 'generation.executed', result })
-      return sendJson(response, { ok: true, result })
     }
 
     if (url.pathname === '/api/executions/latest' && request.method === 'GET') {
@@ -755,277 +712,6 @@ function createCommand(input) {
   }
 }
 
-async function readActiveSkillSession() {
-  return readJsonFile(activeSkillSessionPath, null)
-}
-
-async function writeActiveSkillSession(input = {}) {
-  const now = new Date().toISOString()
-  const previous = await readActiveSkillSession()
-  const skillName = typeof input.skillName === 'string' && input.skillName ? input.skillName : 'coflow-image'
-  const displayName = typeof input.displayName === 'string' && input.displayName ? input.displayName : 'CoFlow Image'
-  const outputMediaType = input.outputMediaType === 'video' ? 'video' : 'image'
-  const providerSettings = await readProviderSettings(readJsonFile, providerSettingsPath, process.env)
-  const provider = typeof input.provider === 'string' && input.provider ? input.provider : getDefaultProviderForMedia(providerSettings, outputMediaType)
-  const session = {
-    id: previous?.id || `active-skill:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-    status: 'active',
-    skillName,
-    displayName,
-    outputMediaType,
-    provider,
-    autoRun: input.autoRun !== false,
-    startedAt: previous?.startedAt || now,
-    updatedAt: now,
-  }
-  await writeJson(activeSkillSessionPath, session)
-  return session
-}
-
-async function clearActiveSkillSession() {
-  await rm(activeSkillSessionPath, { force: true })
-}
-
-async function runActiveSkillFrame(input = {}) {
-  const session = await readActiveSkillSession()
-  if (!session?.status) throw new Error('No active media Skill session. Activate a Skill from Codex first.')
-
-  const latestFrameInputMeta = await readJsonFile(latestFrameInputPath, null)
-  const latestFrameRequest = await readJsonFile(latestCodexFrameRequestPath, null)
-  const frameInput = latestFrameInputMeta?.frameInput?.absolutePath
-    ? await readJsonFile(latestFrameInputMeta.frameInput.absolutePath, null)
-    : null
-  const frameId = input.frameId || frameInput?.frameId || latestFrameRequest?.request?.frameId
-  if (!frameId) throw new Error('No frameId found. Click Send to Codex or Generate version on a frame first.')
-
-  if (input.frameRequestId && frameInput?.requestId && input.frameRequestId !== frameInput.requestId) {
-    throw new Error(`Latest Frame Input belongs to ${frameInput.requestId}, not ${input.frameRequestId}.`)
-  }
-
-  const e2eStartedAt = typeof input.e2eStartedAt === 'string' && input.e2eStartedAt ? input.e2eStartedAt : new Date().toISOString()
-  const command = await createRealSkillVersionCommand(session, frameInput, frameId, { e2eStartedAt })
-  await appendCommand(command)
-  return {
-    session,
-    command,
-    frameInput: latestFrameInputMeta?.frameInput,
-  }
-}
-
-async function createRealSkillVersionCommand(session, frameInput, frameId, timing = {}) {
-  const outputMediaType = session.outputMediaType === 'video' ? 'video' : 'image'
-  const prompt = extractFramePromptText(frameInput, outputMediaType)
-  const references = extractFrameReferences(frameInput)
-  const generationMode = inferSkillGenerationMode(outputMediaType, references)
-  const extension = outputMediaType === 'video' ? 'mp4' : 'png'
-  const group = outputMediaType === 'video' ? 'videos' : 'images'
-  const requestId = `active-skill-generation:${Date.now()}`
-  const outputLocalPath = `.coflow/assets/${group}/${sanitizeFilePart(requestId)}.${extension}`
-  const provider = normalizeActiveSkillProvider(session.provider)
-  const request = {
-    id: requestId,
-    provider,
-    generationMode,
-    kind: generationMode,
-    output: {
-      mediaType: outputMediaType,
-      localPath: outputLocalPath,
-    },
-    instructions: {
-      prompt,
-    },
-    references,
-  }
-  const execution = await runStrictProviderExecution(request)
-  const finalOutput = execution.providerOutput?.materialized ? execution.providerOutput : execution.output
-  const outputDimensions = await probeMediaDimensions(finalOutput.absolutePath)
-  const providerTimings = execution.externalExecution?.timings
-
-  return createCommand({
-    source: 'active-skill-session',
-    type: 'canvas.create_version',
-    frameId,
-    sourceShapeId: frameInput?.summary?.anchorMediaId || frameInput?.promptPart?.anchorMedia?.shapeId,
-    prompt,
-    provider,
-    mediaType: outputMediaType,
-    outputMediaType,
-    generationMode,
-    references,
-    localPath: finalOutput.localPath,
-    absolutePath: finalOutput.absolutePath,
-    outputWidth: outputDimensions?.width,
-    outputHeight: outputDimensions?.height,
-    generationStartedAt: providerTimings?.startedAt,
-    generationCompletedAt: providerTimings?.completedAt,
-    generationDurationMs: providerTimings?.totalDurationMs,
-    providerTimings,
-    e2eStartedAt: timing.e2eStartedAt,
-    title: `${session.displayName} version`,
-    model: execution.externalExecution?.request?.model || execution.selectedProviderPayload?.model || execution.selectedProvider,
-    status: 'succeeded',
-    skillName: session.skillName,
-    minClientVersion: CANVAS_CLIENT_VERSION,
-  })
-}
-
-async function probeMediaDimensions(absolutePath) {
-  if (!absolutePath) return undefined
-  try {
-    const { stdout } = await execFileAsync('ffprobe', [
-      '-v',
-      'error',
-      '-show_entries',
-      'stream=codec_type,width,height',
-      '-of',
-      'json',
-      absolutePath,
-    ])
-    const parsed = JSON.parse(stdout)
-    const stream = Array.isArray(parsed?.streams)
-      ? parsed.streams.find((item) => item?.codec_type === 'video' && item.width && item.height) ||
-        parsed.streams.find((item) => item?.width && item.height)
-      : undefined
-    const width = Number(stream?.width)
-    const height = Number(stream?.height)
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined
-    return { width, height }
-  } catch {
-    return undefined
-  }
-}
-
-async function runStrictProviderExecution(request) {
-  const providerExecution = await prepareProviderExecution(request)
-  const { selectedProvider, selectedProviderPayload, externalExecution } = providerExecution
-  if (externalExecution?.status === 'skipped') {
-    throw new Error(`${selectedProvider} is not configured. Add ATLASCLOUD_API_KEY to .env.local before generating.`)
-  }
-  if (externalExecution?.status === 'processing') {
-    throw new Error(`${selectedProvider} is still processing. Background polling is not implemented for active canvas Skills yet.`)
-  }
-  if (externalExecution?.status !== 'succeeded') {
-    throw new Error(`${selectedProvider} generation failed: ${externalExecution?.error || JSON.stringify(externalExecution?.body ?? externalExecution)}`)
-  }
-
-  const outputMediaType = request.output?.mediaType === 'video' ? 'video' : 'image'
-  const fallbackLocalPath = request.output.localPath
-  const fallbackAbsolutePath = resolveStoreLocalPath(fallbackLocalPath)
-  const previewLocalPath = `.coflow/assets/images/${sanitizeFilePart(request.id)}-preview.svg`
-  const previewAbsolutePath = resolveStoreLocalPath(previewLocalPath)
-  const previewSvg = providerStatePreviewSvg(request, 'processing')
-  await mkdir(join(assetsRoot, outputMediaType === 'video' ? 'videos' : 'images'), { recursive: true })
-  await mkdir(join(assetsRoot, 'images'), { recursive: true })
-  await writeFile(previewAbsolutePath, previewSvg)
-
-  const materialized = await materializeProviderOutputIfAvailable({
-    externalExecution,
-    outputMediaType,
-    fallbackLocalPath,
-    fallbackAbsolutePath,
-    fallbackPreviewLocalPath: previewLocalPath,
-    fallbackPreviewAbsolutePath: previewAbsolutePath,
-    fallbackPreviewSrc: svgDataUrl(previewSvg),
-  })
-  if (!materialized.providerOutput?.materialized) {
-    throw new Error(`${selectedProvider} succeeded but the output could not be materialized locally.`)
-  }
-
-  const result = {
-    id: `execution:${Date.now()}`,
-    requestId: request.id,
-    provider: request.provider,
-    status: 'succeeded',
-    selectedProvider,
-    selectedProviderPayload,
-    externalExecution,
-    providerOutput: materialized.providerOutput,
-    output: materialized.output,
-    preview: materialized.preview,
-    note: 'Active canvas Skill executed a real provider and materialized the output locally.',
-  }
-  await writeJson(join(executionsRoot, `${sanitizeFilePart(result.id)}.json`), result)
-  await writeJson(latestExecutionResultPath, {
-    updatedAt: new Date().toISOString(),
-    source: 'active-skill-session',
-    result,
-  })
-  return result
-}
-
-function normalizeActiveSkillProvider(provider) {
-  if (provider === 'seedance' || provider === 'kling') return provider
-  if (provider === 'atlas' || provider === 'AtlasCloud' || provider === 'atlas-cloud') return 'Atlas Cloud'
-  return 'Atlas Cloud'
-}
-
-function inferSkillGenerationMode(outputMediaType, references) {
-  if (outputMediaType === 'video') return references.length > 0 ? 'reference_to_video' : 'text_to_video'
-  return references.length > 0 ? 'image_edit' : 'text_to_image'
-}
-
-function extractFrameReferences(frameInput) {
-  const media = Array.isArray(frameInput?.promptPart?.media) ? frameInput.promptPart.media : []
-  return media
-    .map((item) => ({
-      mediaType: item.shapeType === 'video' ? 'video' : 'image',
-      role: item.shapeId === frameInput?.summary?.anchorMediaId ? 'source' : 'reference',
-      localPath: item.localPath,
-      absolutePath: item.absolutePath,
-      bounds: item.bounds,
-    }))
-    .filter((item) => item.localPath || item.absolutePath)
-}
-
-function extractFramePromptText(frameInput, outputMediaType = 'image') {
-  const annotations = Array.isArray(frameInput?.promptPart?.annotations) ? frameInput.promptPart.annotations : []
-  const texts = Array.isArray(frameInput?.summary?.annotationTexts) ? frameInput.summary.annotationTexts : []
-  const annotationTexts = annotations.map((annotation) => annotation?.text).filter(Boolean)
-  const textDirectives = (texts.length > 0 ? texts : annotationTexts).map((text) => String(text).trim()).filter(Boolean)
-  const hasSourceMedia =
-    Boolean(frameInput?.promptPart?.anchorMedia) ||
-    (Array.isArray(frameInput?.promptPart?.media) && frameInput.promptPart.media.length > 0)
-  const hasSpatialAnnotations = annotations.some((annotation) => annotation && !annotation.text)
-
-  if (!hasSourceMedia && textDirectives.length === 0) {
-    return `Generate a new version from frame "${frameInput?.summary?.frameName || frameInput?.frameId || 'Untitled frame'}".`
-  }
-
-  const promptSections = []
-
-  if (hasSourceMedia) {
-    if (outputMediaType === 'video') {
-      promptSections.push(
-        [
-          'Use the selected canvas media as the primary visual reference.',
-          'Apply the user request and canvas annotations as instructions.',
-          'Do not render canvas annotations, selection outlines, or editor UI into the output video unless explicitly requested.',
-        ].join(' '),
-      )
-    } else {
-      promptSections.push(
-        [
-          'Use the selected canvas image as the primary visual reference.',
-          'Apply the user request and canvas annotations as instructions.',
-          'Do not render canvas annotations, red boxes, arrows, selection outlines, or editor UI into the output image unless explicitly requested.',
-        ].join(' '),
-      )
-    }
-  }
-
-  if (textDirectives.length > 0) {
-    promptSections.push(`Canvas edit instructions:\n${textDirectives.map((text) => `- ${text}`).join('\n')}`)
-  }
-
-  if (hasSpatialAnnotations) {
-    promptSections.push(
-      'Spatial guidance: use non-text annotations such as arrows, boxes, and drawn marks to identify the target regions. Apply the requested edits to those indicated regions only.',
-    )
-  }
-
-  return promptSections.join('\n\n')
-}
-
 function normalizeSelectionSnapshot(input) {
   const selectedIds = Array.isArray(input?.selectedIds) ? input.selectedIds.filter((id) => typeof id === 'string') : []
   const selectedItems = Array.isArray(input?.selectedItems)
@@ -1230,142 +916,6 @@ async function readRawBody(request) {
   return Buffer.concat(chunks)
 }
 
-async function materializeProviderOutputIfAvailable(args) {
-  const outputUrl = args.externalExecution?.outputUrl || args.externalExecution?.outputs?.[0]
-  if (!outputUrl || args.externalExecution?.status !== 'succeeded') {
-    return {
-      output: {
-        localPath: args.fallbackLocalPath,
-        absolutePath: args.fallbackAbsolutePath,
-      },
-      preview: {
-        localPath: args.fallbackPreviewLocalPath,
-        absolutePath: args.fallbackPreviewAbsolutePath,
-        src: args.fallbackPreviewSrc,
-      },
-      providerOutput: null,
-    }
-  }
-
-  const response = await fetch(outputUrl)
-  if (!response.ok) {
-    return {
-      output: {
-        localPath: args.fallbackLocalPath,
-        absolutePath: args.fallbackAbsolutePath,
-      },
-      preview: {
-        localPath: args.fallbackPreviewLocalPath,
-        absolutePath: args.fallbackPreviewAbsolutePath,
-        src: args.fallbackPreviewSrc,
-      },
-      providerOutput: {
-        url: outputUrl,
-        materialized: false,
-        error: `Download failed with HTTP ${response.status}`,
-      },
-    }
-  }
-
-  const contentTypeHeader = response.headers.get('content-type') || ''
-  const extension = extensionFromContentTypeOrUrl(contentTypeHeader, outputUrl, args.outputMediaType)
-  const group = args.outputMediaType === 'video' ? 'videos' : 'images'
-  const fileName = `atlas-cloud-output-${Date.now()}.${extension}`
-  const localPath = `.coflow/assets/${group}/${fileName}`
-  const absolutePath = join(assetsRoot, group, fileName)
-  const bytes = Buffer.from(await response.arrayBuffer())
-
-  await mkdir(join(assetsRoot, group), { recursive: true })
-  await writeFile(absolutePath, bytes)
-
-  const preview =
-    args.outputMediaType === 'image'
-      ? {
-          localPath,
-          absolutePath,
-          src: `/asset-store/assets/${group}/${fileName}`,
-        }
-      : {
-          localPath: args.fallbackPreviewLocalPath,
-          absolutePath: args.fallbackPreviewAbsolutePath,
-          src: args.fallbackPreviewSrc,
-        }
-
-  return {
-    output: {
-      localPath,
-      absolutePath,
-    },
-    preview,
-    providerOutput: {
-      url: outputUrl,
-      materialized: true,
-      localPath,
-      absolutePath,
-      contentType: contentTypeHeader,
-      bytes: bytes.length,
-    },
-  }
-}
-
-function resolveStoreLocalPath(localPath) {
-  if (typeof localPath !== 'string' || !localPath.startsWith(`${STORE_DIR}/`)) {
-    throw new Error(`Unsafe local output path: ${localPath}`)
-  }
-  const relative = localPath.slice(`${STORE_DIR}/`.length)
-  return join(storeRoot, relative)
-}
-
-function providerStatePreviewSvg(request, state) {
-  const isFailed = state === 'failed'
-  const mediaType = request.output?.mediaType === 'video' ? 'video' : 'image'
-  const title = isFailed ? 'Generation needs attention' : mediaType === 'video' ? 'Rendering motion' : 'Composing image'
-  const subtitle = isFailed ? 'The provider did not return a usable result.' : 'Waiting for the provider result.'
-  const accent = isFailed ? '#ef4444' : '#2563eb'
-  return `
-    <svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480">
-      <defs>
-        <linearGradient id="shimmer" x1="-1" x2="1" y1="0" y2="0">
-          <stop offset="0" stop-color="#f1f5f9"/>
-          <stop offset="0.45" stop-color="#ffffff"/>
-          <stop offset="1" stop-color="#e5e7eb"/>
-          <animate attributeName="x1" values="-1;1" dur="1.35s" repeatCount="indefinite"/>
-          <animate attributeName="x2" values="0;2" dur="1.35s" repeatCount="indefinite"/>
-        </linearGradient>
-      </defs>
-      <rect width="720" height="480" rx="28" fill="#ffffff"/>
-      <rect x="1" y="1" width="718" height="478" rx="27" fill="none" stroke="#e5e7eb" stroke-width="2"/>
-      ${
-        isFailed
-          ? `<circle cx="360" cy="190" r="48" fill="#fef2f2"/>
-             <path d="M360 158v42" stroke="${accent}" stroke-width="10" stroke-linecap="round"/>
-             <circle cx="360" cy="226" r="6" fill="${accent}"/>`
-          : `<rect x="76" y="72" width="568" height="274" rx="26" fill="url(#shimmer)"/>
-             <rect x="92" y="366" width="292" height="24" rx="12" fill="#eef2f7"/>
-             <rect x="92" y="406" width="190" height="18" rx="9" fill="#f3f4f6"/>
-             <circle cx="612" cy="410" r="20" fill="#eef2ff"/>
-             <path d="M607 409.5h10m-5-5v10" stroke="${accent}" stroke-width="3" stroke-linecap="round"/>`
-      }
-      <text x="360" y="${isFailed ? 304 : 320}" fill="#111827" font-family="Inter,Arial" font-size="24" font-weight="650" text-anchor="middle">${escapeXml(title)}</text>
-      <text x="360" y="${isFailed ? 340 : 354}" fill="#64748b" font-family="Inter,Arial" font-size="16" text-anchor="middle">${escapeXml(subtitle)}</text>
-    </svg>
-  `.trim()
-}
-
-function svgDataUrl(svg) {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-}
-
-function escapeXml(value) {
-  return String(value).replace(/[<>&"']/g, (char) => {
-    if (char === '<') return '&lt;'
-    if (char === '>') return '&gt;'
-    if (char === '&') return '&amp;'
-    if (char === '"') return '&quot;'
-    return '&apos;'
-  })
-}
-
 function bytesFromDataUrl(src) {
   if (typeof src !== 'string' || !src.startsWith('data:')) {
     throw new Error('Asset materialization requires a data URL payload.')
@@ -1393,22 +943,6 @@ function extensionFromMimeType(mimeType) {
   if (mimeType === 'video/webm') return 'webm'
   if (mimeType === 'video/quicktime') return 'mov'
   return 'bin'
-}
-
-function extensionFromContentTypeOrUrl(contentTypeHeader, url, outputMediaType) {
-  const contentTypeExtension = extensionFromMimeType(contentTypeHeader.split(';')[0])
-  if (contentTypeExtension !== 'bin') return contentTypeExtension
-
-  const pathname = (() => {
-    try {
-      return new URL(url).pathname
-    } catch {
-      return String(url)
-    }
-  })()
-  const extension = extname(pathname).replace(/^\./, '').toLowerCase()
-  if (extension) return extension
-  return outputMediaType === 'video' ? 'mp4' : 'png'
 }
 
 function sanitizeFilePart(value) {

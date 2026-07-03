@@ -23,6 +23,56 @@ For canvas video tasks, the normal product path is:
 
 The public product path is context capture, Codex/provider generation, and `canvas.insert_media` writeback. Do not route user-facing video work through any canvas-side black-box generation shortcut.
 
+## CoFlow writeback mode
+
+If this task uses CoFlow canvas context, generated media must be written back with `canvas.insert_media` before the task is considered complete.
+
+This applies even if generation is delegated to another skill or provider.
+
+Enter CoFlow writeback mode when either of these is true:
+
+- the task comes from a CoFlow frame, selection, or viewport;
+- the current request uses CoFlow canvas context, including Frame Input, selected objects, visible viewport items, source assets, annotations, or canvas screenshots.
+
+Completion in CoFlow writeback mode requires all of the following:
+
+1. read the correct canvas context;
+2. complete video generation or video revision;
+3. obtain a writable result path or URL;
+4. call `canvas.insert_media`;
+5. tell the user that the result was written back to the CoFlow canvas.
+
+Allowed generation routes:
+
+- CoFlow built-in provider execution through `canvas.run_provider`;
+- Codex native generation when available;
+- a user-requested external skill or MCP;
+- another installed provider.
+
+Regardless of the route, if the task started from CoFlow canvas context and a generated video exists, the final step is always `canvas.insert_media`.
+
+Do not stop at a file path, inline preview, or "generated" message without writing back to the canvas.
+
+If another skill/provider succeeds but does not return a writable local path, absolute path, or URL, stop and say:
+
+```text
+Generation succeeded, but I cannot write it back to CoFlow because no writable media path or URL was returned.
+```
+
+Minimum normalized result for writeback:
+
+```json
+{
+  "mediaType": "video",
+  "localPath": "...",
+  "absolutePath": "...",
+  "src": "...",
+  "prompt": "...",
+  "provider": "...",
+  "model": "..."
+}
+```
+
 ## Authorization behavior
 
 When the user invokes this video skill for a canvas task, treat that invocation as permission to use the current bounded canvas context for the requested generation/revision. Do not ask a second user-facing confirmation before calling `canvas.run_provider`.
@@ -59,20 +109,37 @@ If a provider does not support true native video editing, say so and use keyfram
 
 ## Provider policy
 
-Do not read provider status/settings on every normal generation.
+Do not hardcode the active provider when provider settings are available.
 
-Default provider/model: Atlas Cloud + Seedance 2.0. If credentials are missing, enter provider setup and stop. Do not fake generation.
+Default video behavior:
+
+- built-in video default is Atlas Cloud + Seedance 2.0;
+- active provider/model should come from saved provider settings when available;
+- if the user explicitly names a provider/model, that user choice overrides saved defaults for this run.
+- CoFlow includes a small verified Atlas Cloud video model catalog for common Seedance and Kling choices. If the user asks for a model not in the local catalog, check the current Atlas Cloud model page/API tab before using it.
+
+Provider settings:
+
+- For video generation, read `canvas.get_provider_settings` when available, or let `canvas.run_provider` apply the configured video default.
+- Use Atlas Cloud + Seedance 2.0 only as the built-in fallback when no saved provider setting exists.
+- If the configured provider is missing credentials, enter provider setup and stop. Do not fake generation.
 
 Default model intent:
 
 - text-to-video: Seedance 2.0;
 - image/reference-to-video: Seedance 2.0 reference-to-video.
 
+Common built-in Atlas Cloud video choices include Seedance 2.0 Mini and Kling V3.0/O3 variants. Default video remains Seedance 2.0 unless the user changes it.
+
 Default video params:
 
 - duration: 5 seconds unless the user specifies otherwise;
+- resolution: 720p unless the user specifies otherwise;
 - aspect ratio: if the user explicitly asks for a ratio, pass that ratio; otherwise use the configured provider's source-adaptive mode when available;
+- bitrate mode: standard unless the user specifies otherwise;
 - audio: enabled by default. If the provider/model cannot generate audio, say so explicitly instead of silently returning a mute result;
+- watermark: disabled by default unless the user explicitly asks for it;
+- return last frame: disabled by default unless the user explicitly asks for it;
 - multiple image references: preserve all source/reference roles in the provider request. Do not silently collapse multi-reference canvas context into one image unless the provider does not support multi-reference input; if a fallback is required, explain the fallback.
 
 Use Atlas Cloud API documentation fields for the selected model. For Seedance 2.0, do not invent fields such as output `width`, `height`, or `fps`; use documented fields such as `duration`, `resolution`, `ratio`, `bitrate_mode`, `generate_audio`, `watermark`, and `return_last_frame` when supported by the chosen endpoint.
@@ -82,10 +149,29 @@ If the configured provider is not ready, stop and report the provider setup erro
 Use `canvas.run_provider` for the actual provider execution. Pass:
 
 - `mediaType: "video"`;
-- `provider: "Atlas Cloud"` unless the user explicitly selected another video-capable provider;
+- `provider`: the provider selected by user instruction or saved provider settings; omit it only when `canvas.run_provider` is expected to apply the configured default;
 - `generationMode: "reference_to_video"` when references are present, otherwise `text_to_video`;
 - `prompt`: only the user request plus canvas annotation text/spatial guidance;
 - `references`: the exact local source/reference assets from the bounded frame/selection/viewport context.
+- `providerOptions`: structured video parameters extracted from the user request or canvas annotations when present.
+
+For Atlas Cloud video, use `providerOptions` fields matching the API names:
+
+- `duration`
+- `resolution`
+- `ratio`
+- `bitrate_mode`
+- `generate_audio`
+- `watermark`
+- `return_last_frame`
+
+Examples:
+
+- If the user says `16:9, 6s, 1080P`, pass `"ratio": "16:9"`, `"duration": 6`, and `"resolution": "1080p"`.
+- If the user says `no watermark`, pass `"watermark": false`.
+- If the user says `return last frame` / `返回最后一帧`, pass `"return_last_frame": true`.
+- If the user says `mute` / `无声`, pass `"generate_audio": false`; if the user says `with audio` / `有声音`, pass `"generate_audio": true`.
+- If the user says `high bitrate` / `高码率`, pass `"bitrate_mode": "high"`.
 
 `canvas.run_provider` only generates and materializes a local output file. It does not read canvas state and it does not write to the canvas. After `canvas.run_provider` returns `ok: true`, always call `canvas.insert_media` immediately.
 
@@ -99,26 +185,15 @@ Preferred writeback shape:
 }
 ```
 
-If you do not pass `providerResult`, then pass `mediaType` plus the returned `localPath`, `absolutePath`, `src`, provider/model, prompt, and timing fields explicitly. Never call `canvas.insert_media` without generated media path fields.
+If you do not pass `providerResult`, then pass `mediaType` plus the returned `localPath`, `absolutePath`, `src`, provider/model, and prompt explicitly. Never call `canvas.insert_media` without generated media path fields. A result from Codex native generation, an external skill, MCP, or another provider must be normalized to this minimum shape before writeback.
 
-## Canvas active mode
+## Canvas quick edit boundary
 
-When the user wants to keep generating/revising multiple video tasks from frames, activate video session mode:
+CoFlow does not use active Skill session mode. Do not call or expect `canvas.activate_skill_session`, `canvas.get_active_skill_session`, or `canvas.clear_active_skill_session`.
 
-```json
-{
-  "skillName": "coflow-video",
-  "displayName": "CoFlow Video",
-  "outputMediaType": "video",
-  "autoRun": true
-}
-```
+Frame actions are context bridge actions only: selected frames show `Send to Codex`, which publishes Frame Input and waits for Codex/user instruction.
 
-After that, selected frames show `Generate version`. Clicking it should:
-
-1. create fresh Frame Input;
-2. send the bounded task to Codex / this skill;
-3. let Codex infer text-to-video or reference-to-video, generate the media, and call `canvas.insert_media`.
+Video generation and revision should stay in this Codex skill workflow unless a future canvas-side video Quick Edit is explicitly designed. The current canvas Quick Edit pattern is for simple single-image edits, not video/frame/multi-object orchestration.
 
 ## Writeback
 
@@ -133,8 +208,6 @@ After successful generation, call `canvas.insert_media` with:
 - model;
 - skillName: `coflow-video`;
 - output dimensions when available (`outputWidth`, `outputHeight`);
-- provider timing metadata when available (`generationStartedAt`, `generationCompletedAt`, `generationDurationMs`, `providerTimings`);
-- internal end-to-end timing metadata when available (`e2eStartedAt`, `e2eCompletedAt`, `e2eDurationMs`, `writebackCompletedAt`);
 - lineage to the source frame or reference media.
 
 ## Codex response preview

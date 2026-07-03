@@ -8,7 +8,7 @@ This document freezes the current Phase 0 runtime boundary so canvas state, loca
 | --- | --- | --- |
 | tldraw browser | visual canvas state, selected frame, geometry, imported asset metadata, generated child shape writeback | API keys, provider/model orchestration, permanent execution history |
 | local server | local asset store, canvas persistence, metadata snapshots, command queue, optional debug provider execution, provider output materialization | visual selection logic, raw Codex conversation state |
-| Codex / MCP / Skills | high-level user intent, active skill session, provider/model choice, generation/edit orchestration | direct mutation of tldraw scene without going through canvas writeback tools |
+| Codex / MCP / Skills | high-level user intent, invoked skill context, provider/model choice, generation/edit orchestration | direct mutation of tldraw scene without going through canvas writeback tools |
 | Atlas provider | temporary uploaded media URLs, async generation jobs, remote output URLs | local durable storage or canvas lineage |
 
 ## tldraw schema-first hard rule
@@ -47,7 +47,6 @@ Expected layout:
   logs/
     operations.jsonl
   metadata/
-    active-skill-session.json
     latest-frame-context.json
     latest-codex-frame-request.json
     latest-frame-input.json
@@ -68,7 +67,6 @@ Rules:
 - `frame-inputs/*.json` are hidden agent source-of-truth artifacts created by `Send to Codex`.
 - `frame-screenshots/*.png` are auxiliary visual artifacts for Codex/user inspection.
 - `metadata/latest-*.json` files are snapshots for inspection and UI/debug convenience.
-- `metadata/active-skill-session.json` stores the current Codex-controlled Skill session for the canvas shortcut UI.
 - `executions/*.json` and `logs/operations.jsonl` are the durable history.
 - `.coflow/assets/**` is the durable local media store.
 - Provider remote URLs are temporary and must be materialized into `.coflow/assets/**` before being considered canvas outputs.
@@ -99,12 +97,12 @@ Current Phase 1 implementation note:
 - The default frame button is `Send to Codex`.
 - `Send to Codex` extracts bounded frame context, saves a hidden Frame Input JSON, saves a frame screenshot artifact, and publishes an awaiting-user-instruction frame request.
 - It does not call a provider by default.
-- Codex / an active Codex agent skill is responsible for choosing image/video/3D skill, provider, model, mode, parameters, and task-specific prompt.
+- Codex / the invoked Codex agent skill is responsible for choosing image/video/3D skill, provider, model, mode, parameters, and task-specific prompt.
 - Codex context priority is: active frame / Frame Input > selected objects > visible viewport > prompt only.
 - Selection capture uses a fresh browser capture as the primary path: Codex asks the open canvas browser to compute current selected ids, selected items, optional active frame, and visible viewport items from live tldraw editor state. Cached `latest-selection.json` is fallback/debug only.
-- Browser-side provider execution may exist as a debug spike path only; it is not the canonical product path.
-- `Generate version` appears only when an active skill / auto-run mode is already established, and it must appear as an additional shortcut rather than replacing `Send to Codex`.
-- Phase 1 active skill execution uses the real provider boundary by default.
+- Browser-side provider execution may exist only for explicitly designed canvas-side Quick Edit flows; it is not the canonical frame / multi-object product path.
+- Quick Edit is a selected single-image inline-prompt flow for simple one-shot image edits. It is not a frame action, not an active session, and not a replacement for `Send to Codex`.
+- Phase 1 Codex-driven execution uses the real provider boundary by default.
 - If provider credentials are missing or the provider fails, the canvas reports failure instead of inserting mock media.
 - Default generation actions do not allow mock fallback. `mock-provider` is reserved for explicit local tests/debugging.
 
@@ -117,7 +115,7 @@ User clicks Send to Codex
   -> server writes .coflow/frame-inputs/*.json
   -> Codex reads canvas.get_frame_request / canvas.get_frame_input
   -> user confirms or adds instruction in Codex
-  -> active skill/provider generates media outside the browser
+  -> Codex skill/provider generates media outside the browser
   -> Codex calls canvas.insert_media or canvas.create_version
   -> browser polls /api/commands/pending
   -> browser places result and lineage on canvas
@@ -150,9 +148,9 @@ canvas.insert_media
 canvas.create_version
 canvas.link_versions
 canvas.get_provider_status
-canvas.get_active_skill_session
-canvas.activate_skill_session
-canvas.clear_active_skill_session
+canvas.get_provider_settings
+canvas.set_provider_settings
+canvas.run_provider
 ```
 
 Removed runtime surface:
@@ -172,44 +170,28 @@ Phase 2 cleanup target:
 browser-generated fresh selected-region PNG capture
 ```
 
-## Active Skill Session flow
+## Quick Edit flow
 
-The canvas can enter a lightweight session mode after Codex activates a media Skill:
-
-```text
-Codex / MCP calls canvas.activate_skill_session
-  -> server writes metadata/active-skill-session.json
-  -> browser polls /api/active-skill/session
-  -> canvas shows a minimal active-skill pill
-  -> selected frame button becomes Generate version
-```
-
-Session payload:
-
-```json
-{
-  "status": "active",
-  "skillName": "coflow-image",
-  "displayName": "Canvas Image Skill",
-  "outputMediaType": "image",
-  "provider": "atlas",
-  "autoRun": true
-}
-```
-
-When the user clicks `Generate version`:
+Quick Edit is an optional canvas-side single-image flow. It is designed for low-friction edits where the user has exactly one image selected and can express the desired change in a short inline prompt.
 
 ```text
-browser extracts bounded frame context
-browser saves screenshot and Frame Input
-browser marks the request ready_to_execute
-browser POST /api/active-skill/run-frame
-server runs the real provider boundary using the active skill policy
-server materializes the provider output into .coflow/assets
-server queues canvas.create_version
-browser polls /api/commands/pending
-browser places output media and lineage arrow
+user selects exactly one image
+  -> canvas shows an image-only Quick Edit affordance
+  -> user enters a short prompt
+  -> browser/server provider executor runs the configured image provider
+  -> server materializes the provider output into .coflow/assets
+  -> server queues canvas.create_version / canvas.insert_media
+  -> browser places output near the source image with lineage
 ```
+
+Constraints:
+
+- Quick Edit appears only for exactly one selected image.
+- It is for simple image edits such as color/style changes, cleanup, upscale, remove background, or small local revisions.
+- It must not appear for frames, multi-selection, video, 3D, or ambiguous scene-level tasks.
+- It must not read or write active Skill session metadata.
+- It must not replace `Send to Codex` for complex tasks.
+- If provider credentials or required capabilities are missing, it must fail clearly or point to setup; it must not insert mock media.
 
 Writeback payload contract for `canvas.insert_media` / `canvas.create_version`:
 
@@ -250,13 +232,12 @@ Rules:
 - `e2eStartedAt` / `e2eCompletedAt` / `e2eDurationMs` / `writebackCompletedAt` are internal diagnostics for the user-perceived path from canvas/Codex action to visible writeback. They are not part of the end-user asset details popover.
 - The canvas stores timing fields under generated asset/shape metadata for performance diagnosis, while the visible asset popover stays focused on prompt, references, model/provider, and local provenance.
 
-Rules:
+Interaction rules:
 
-- `Send to Codex` remains available in both context mode and active Skill mode.
-- In active Skill mode, the frame action surface should show both `Send to Codex` and `Generate version`: the first exports context for Codex/user follow-up, the second immediately runs the active Skill.
-- `Generate version` must not appear as a generic provider button.
-- Active Skill mode is sticky only as session metadata; it is not a whiteboard Skill marketplace.
-- Real provider selection stays inside Codex Skill logic.
+- `Send to Codex` is the frame action. It exports context for Codex/user follow-up and does not directly run a provider.
+- Quick Edit is a separate selected-image action. It should not appear on frames.
+- A frame-level one-click generation action must not be reintroduced through active sessions or browser-direct provider execution. It can return only if it routes through a real Codex callback/task mechanism that preserves Codex-owned context understanding.
+- Real provider selection stays inside Codex Skill logic, except for the intentionally narrow single-image Quick Edit path.
 - `coflow-image` decides text-to-image vs image/reference edit.
 - `coflow-video` decides text-to-video vs image/reference/video regeneration.
 - Mock fallback is not allowed for normal product experience.
@@ -301,7 +282,7 @@ ProviderReadyGenerationRequest
   -> runExternalProviderIfConfigured
 ```
 
-Atlas Cloud-specific rules when an active skill or debug executor uses Atlas Cloud:
+Atlas Cloud-specific rules when an invoked skill or debug executor uses Atlas Cloud:
 
 - Treat each Atlas Cloud model's live schema URL from `GET https://api.atlascloud.ai/api/v1/models` as the source of truth for provider payload fields. Do not copy field names from another model family or a generic Atlas Cloud example.
 - If `ATLASCLOUD_API_KEY` is configured, local references are uploaded through `/model/uploadMedia`.
@@ -317,7 +298,7 @@ Atlas Cloud-specific rules when an active skill or debug executor uses Atlas Clo
 - Provider adapters keep only light, provider-level guardrails such as not rendering canvas annotations or editor UI. Product-specific constraints belong in the Codex image/video skill prompt compiler.
 - AVIF references stored as `.avif.bin` are normalized to PNG before Atlas Cloud image-edit upload.
 - Image/video generation result URLs are downloaded into local asset store.
-- If Atlas Cloud is not configured, active Skill execution fails visibly and must not insert mock media.
+- If Atlas Cloud is not configured, provider execution fails visibly and must not insert mock media.
 
 Product rule:
 
@@ -405,5 +386,5 @@ The user-facing status should report selected provider/model defaults first. Cre
 - `metadata/latest-*.json` names can make people think they are authoritative history. They are only snapshots; history is in `executions/` and `operations.jsonl`.
 - Video output currently uses SVG preview fallback even when the final provider output is a video. Phase 2 should add first-frame thumbnail extraction.
 - Canvas video writeback must not assume every generated video is `16:9`. Use actual materialized media dimensions when available; otherwise preserve the source/anchor display size until provider dimensions are known.
-- `/api/executions/run-latest` and direct generation-request execution should be marked debug-only or moved behind active skill execution.
+- `/api/executions/run-latest` and direct generation-request execution were removed from the product runtime. Do not restore them as the frame or multi-object generation path.
 - `canvas.capture_selection` and `canvas.link_versions` now exist as first-class MCP tools. `capture_selection` requests fresh structured selection/viewport context from the open browser first, then falls back to cached snapshots only when the browser is unavailable. Fresh browser-rendered selected-region PNG capture is still a Phase 2 cleanup target.

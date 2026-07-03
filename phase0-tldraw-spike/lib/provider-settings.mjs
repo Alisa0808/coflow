@@ -41,6 +41,7 @@ export function normalizeProviderSettings(input, env = process.env) {
       ...defaults.video,
       ...normalizeMediaSettings(input?.video),
     },
+    customProviders: normalizeCustomProviders(input?.customProviders),
   }
 }
 
@@ -62,6 +63,10 @@ export async function writeProviderSettings({ input = {}, readJsonFile, writeJso
       video: {
         ...previous.video,
         ...normalizeMediaSettings(input.video),
+      },
+      customProviders: {
+        ...previous.customProviders,
+        ...normalizeCustomProviders(input.customProviders),
       },
     },
     env,
@@ -136,6 +141,48 @@ function normalizeMediaSettings(value) {
     if (typeof value[key] === 'string' && value[key]) next[key] = key === 'provider' ? canonicalProviderId(value[key]) : value[key]
   }
   return next
+}
+
+function normalizeCustomProviders(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const providers = {}
+  for (const [rawId, rawProfile] of Object.entries(value)) {
+    const id = sanitizeProviderId(rawId)
+    if (!id || !rawProfile || typeof rawProfile !== 'object' || Array.isArray(rawProfile)) continue
+    const profile = {}
+    for (const key of [
+      'id',
+      'label',
+      'baseUrl',
+      'docsUrl',
+      'apiKeyUrl',
+      'authEnv',
+      'submitEndpoint',
+      'uploadEndpoint',
+      'statusEndpoint',
+      'resultEndpoint',
+      'responseOutputPath',
+      'responseJobIdPath',
+      'responseStatusPath',
+      'responseErrorPath',
+    ]) {
+      if (typeof rawProfile[key] === 'string' && rawProfile[key]) profile[key] = rawProfile[key]
+    }
+    for (const key of ['mediaTypes', 'modes', 'models', 'requiredFields', 'optionalFields', 'terminalSuccessStates', 'terminalFailureStates']) {
+      if (Array.isArray(rawProfile[key])) profile[key] = rawProfile[key].filter((item) => typeof item === 'string' && item)
+    }
+    for (const key of ['referenceRequirements', 'async', 'defaults']) {
+      if (rawProfile[key] && typeof rawProfile[key] === 'object' && !Array.isArray(rawProfile[key])) profile[key] = rawProfile[key]
+    }
+    profile.id = typeof profile.id === 'string' && profile.id ? sanitizeProviderId(profile.id) : id
+    providers[id] = profile
+  }
+  return providers
+}
+
+function sanitizeProviderId(value) {
+  if (typeof value !== 'string') return ''
+  return value.trim().replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 80)
 }
 
 function canonicalProviderId(provider) {

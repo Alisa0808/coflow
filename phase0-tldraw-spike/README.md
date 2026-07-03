@@ -19,7 +19,6 @@ This branch contains:
   - provider/model setup and redacted provider diagnostics;
   - provider default settings stored outside the canvas document;
   - image and video skills;
-  - experimental scene workflow skill candidates;
   - first 3D workflow boundary;
   - local-first open-source setup docs.
 
@@ -44,12 +43,12 @@ The Codex plugin skill `coflow-open` should open this URL in the Codex in-app br
 
 ## Provider setup
 
-Atlas Cloud is the default provider for the first real generation loop:
+CoFlow ships with these default generation routes:
 
-- image text-to-image: GPT image 2 via Atlas Cloud;
-- image edit/reference: GPT image 2 edit via Atlas Cloud;
-- video text-to-video: Seedance 2.0 via Atlas Cloud;
-- video reference-to-video: Seedance 2.0 reference-to-video via Atlas Cloud.
+- image text-to-image: Codex built-in GPT Image 2;
+- image edit/reference: Codex built-in GPT Image 2 when the runtime can pass local references;
+- video text-to-video: Atlas Cloud Seedance 2.0;
+- video reference/video editing: Atlas Cloud Seedance 2.0 reference-to-video.
 
 Use the Codex skill `coflow-provider-setup` as the single user-facing entry for:
 
@@ -59,7 +58,7 @@ Use the Codex skill `coflow-provider-setup` as the single user-facing entry for:
 - rerunning setup later;
 - diagnosing runtime generation failures.
 
-Normal provider status should answer "which provider/model is selected." It should not lead with whether Atlas Cloud credentials are configured. Credential checks are only a redacted runtime diagnostic when generation is about to run or fails.
+Normal provider status should answer "which provider/model is selected" and whether the selected external provider is connected. Credential checks are always redacted.
 
 If Atlas Cloud is the selected provider for real generation, add credentials to either:
 
@@ -118,13 +117,44 @@ Core skills:
 - `coflow-video` — text-to-video, reference-to-video, and video regeneration/keyframe-guided revision; it decides the mode from canvas context.
 - `coflow-provider-setup` — view/change image and video provider/model defaults, skip or rerun setup, and diagnose provider runtime failures.
 
-Experimental scene workflow skill candidates:
+Additional scenario skills:
 
 - `coflow-product-marketing` — product/ad/social marketing variants.
 - `coflow-social-repurpose` — 1:1, 9:16, and 16:9 social adaptations.
 - `coflow-video-ad-keyframes` — storyboard/keyframe planning for video ads.
 - `coflow-style-exploration` — multiple visual style directions.
 - `coflow-3d` — first 3D generation/revision workflow boundary.
+
+## CoFlow writeback contract
+
+CoFlow does not need a separate workflow skill for the current image/video loop.
+
+The lightweight contract is:
+
+- Codex is responsible for understanding the request, reading canvas context, and choosing a generation route.
+- CoFlow is responsible for bounded canvas context capture and canvas writeback.
+- Built-in providers, Codex native generation, external skills, MCP tools, or other installed providers may generate the media.
+- If the task starts from CoFlow canvas context, the generated image/video is not complete until it has been written back with `canvas.insert_media`.
+
+This applies to frame, selection, and viewport tasks. A task is considered CoFlow-contextual if it uses Frame Input, selected objects, visible viewport items, source assets, annotation text/geometry, or a canvas screenshot.
+
+Minimum normalized generated-media shape:
+
+```json
+{
+  "mediaType": "image | video",
+  "localPath": "...",
+  "absolutePath": "...",
+  "src": "...",
+  "prompt": "...",
+  "provider": "...",
+  "model": "..."
+}
+```
+
+When available, pass the complete successful provider result to `canvas.insert_media` as `providerResult`. If a result comes from Codex native generation, an external skill, MCP, or another provider, normalize it to the minimum shape before writeback.
+
+If generation succeeds but no writable local path, absolute path, or URL is available, the agent must stop and report that the result cannot be written back to CoFlow. It must not pretend the task is complete.
 
 ## Canvas context priority
 

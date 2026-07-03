@@ -19,7 +19,7 @@ http://127.0.0.1:5176/
 
 2. If port `5176` is not reachable, start the local service from the installed plugin root.
 
-   The plugin root is the directory that contains this plugin's `package.json`, `server.mjs`, and `skills/` folder. Do not use or show a developer checkout path such as `/Users/.../Projects/...`.
+   The plugin root is the directory that contains this plugin's `package.json`, `server.mjs`, and `skills/` folder. Do not use or show a developer checkout path.
 
    Run the service from that installed plugin root with `npm run serve`.
 
@@ -40,8 +40,9 @@ http://127.0.0.1:5176/
    - a generation request fails due to provider credentials;
    - or the tool is already available and the check is effectively free.
 
-   - If `shouldPrompt` is true, show a short first-run setup prompt in the Codex conversation after opening the canvas.
-   - Offer the three actions from the payload: use default provider/model settings, customize provider/model settings, or skip for now.
+   - `shouldPrompt` is an internal boolean returned by the onboarding tool. It means the user has not configured or skipped provider setup yet.
+   - If `shouldPrompt` is true, show a short first-run setup prompt in the Codex conversation after opening the canvas. Do not expose the field name to the user.
+   - Offer the three actions from the payload: "Keep defaults and set up Atlas Cloud", "Customize providers and models", or "Skip for now".
    - If setup is already `configured`, do not interrupt the user; just open the board.
    - If setup was `skipped`, do not nag on every open. Mention that provider setup can be rerun only when the user asks about provider/model settings or generation fails.
 
@@ -55,7 +56,8 @@ After opening the board, tell the user they can:
 - add notes, boxes, or arrows;
 - put a frame around the task;
 - use the image or video skill in Codex;
-- or click `Send to Codex` / `Generate version` when the right skill session is active.
+- click `Send to Codex` on a frame to hand bounded context to Codex;
+- use canvas Quick Edit on a selected single image for simple one-shot edits when that UI is available.
 
 Do not expose implementation paths, developer checkout paths, plugin cache paths, or startup commands in normal user-facing replies. Only show the canvas URL. Mention local paths only when the user is explicitly debugging installation or server startup.
 
@@ -63,7 +65,7 @@ Only when provider onboarding is explicitly checked on first run, also tell the 
 
 - default image provider/model;
 - default video provider/model;
-- "Use defaults", "Customize", or "Skip for now".
+- "Keep defaults and set up Atlas Cloud", "Customize providers and models", or "Skip for now".
 
 ## Guardrails
 

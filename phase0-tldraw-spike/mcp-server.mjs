@@ -1,10 +1,10 @@
-import { appendFile, cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getProviderStatus } from './lib/provider-config.mjs'
 import { prepareProviderExecution } from './lib/provider-executor.mjs'
 import { buildProviderOnboarding } from './lib/provider-onboarding.mjs'
-import { getDefaultProviderForMedia, readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
+import { readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 const workspaceRoot = process.env.WORKSPACE_ROOT || join(root, '..')
@@ -17,7 +17,6 @@ const latestFrameContextPath = join(storeRoot, 'metadata', 'latest-frame-context
 const latestCodexFrameRequestPath = join(storeRoot, 'metadata', 'latest-codex-frame-request.json')
 const latestFrameInputPath = join(storeRoot, 'metadata', 'latest-frame-input.json')
 const latestFrameScreenshotPath = join(storeRoot, 'metadata', 'latest-frame-screenshot.json')
-const activeSkillSessionPath = join(storeRoot, 'metadata', 'active-skill-session.json')
 const providerSettingsPath = join(storeRoot, 'metadata', 'provider-settings.json')
 const metadataRoot = join(storeRoot, 'metadata')
 const assetsRoot = join(storeRoot, 'assets')
@@ -145,58 +144,6 @@ const tools = [
     },
   },
   {
-    name: 'canvas.get_active_skill_session',
-    description:
-      'Read the current active CoFlow Skill session. When present, the canvas frame action can generate directly instead of only sending context.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'canvas.activate_skill_session',
-    description:
-      'Activate a Codex-controlled media Skill session for the canvas. This makes selected frames show Generate version while keeping provider/model execution owned by Codex/Skills.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        skillName: {
-          type: 'string',
-          description: 'Stable skill id, e.g. coflow-image or coflow-video.',
-        },
-        displayName: {
-          type: 'string',
-          description: 'Short user-facing skill name shown in the canvas.',
-        },
-        outputMediaType: {
-          type: 'string',
-          enum: ['image', 'video'],
-          description: 'Default output media type for this skill session.',
-        },
-        provider: {
-          type: 'string',
-          description: 'Provider/runtime label, e.g. Codex, Atlas Cloud, openai, seedance.',
-        },
-        autoRun: {
-          type: 'boolean',
-          description: 'When true, the frame action becomes Generate version. Defaults to true.',
-        },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'canvas.clear_active_skill_session',
-    description:
-      'Clear the active media Skill session. Selected frames return to Send to Codex context mode.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    },
-  },
-  {
     name: 'canvas.get_provider_status',
     description:
       'Read available provider/model status for CoFlow. Use credential fields only as redacted runtime diagnostics; never expose secrets.',
@@ -257,6 +204,40 @@ const tools = [
           },
           additionalProperties: false,
         },
+        customProviders: {
+          type: 'object',
+          description: 'Non-secret custom provider profiles keyed by stable provider id.',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              label: { type: 'string' },
+              mediaTypes: { type: 'array', items: { type: 'string' } },
+              modes: { type: 'array', items: { type: 'string' } },
+              models: { type: 'array', items: { type: 'string' } },
+              baseUrl: { type: 'string' },
+              docsUrl: { type: 'string' },
+              apiKeyUrl: { type: 'string' },
+              authEnv: { type: 'string' },
+              submitEndpoint: { type: 'string' },
+              uploadEndpoint: { type: 'string' },
+              statusEndpoint: { type: 'string' },
+              resultEndpoint: { type: 'string' },
+              responseOutputPath: { type: 'string' },
+              responseJobIdPath: { type: 'string' },
+              responseStatusPath: { type: 'string' },
+              responseErrorPath: { type: 'string' },
+              requiredFields: { type: 'array', items: { type: 'string' } },
+              optionalFields: { type: 'array', items: { type: 'string' } },
+              terminalSuccessStates: { type: 'array', items: { type: 'string' } },
+              terminalFailureStates: { type: 'array', items: { type: 'string' } },
+              referenceRequirements: { type: 'object', additionalProperties: true },
+              async: { type: 'object', additionalProperties: true },
+              defaults: { type: 'object', additionalProperties: true },
+            },
+            additionalProperties: false,
+          },
+        },
       },
       additionalProperties: false,
     },
@@ -303,6 +284,12 @@ const tools = [
             },
             additionalProperties: true,
           },
+        },
+        providerOptions: {
+          type: 'object',
+          description:
+            'Optional provider-specific generation parameters normalized by Codex from the user prompt or canvas annotations. For Atlas Cloud video this may include duration, resolution, ratio, bitrate_mode, generate_audio, watermark, and return_last_frame. These options override prompt/env defaults.',
+          additionalProperties: true,
         },
         outputLocalPath: {
           type: 'string',
@@ -716,42 +703,6 @@ async function handleLine(line) {
       })
     }
 
-    if (toolName === 'canvas.get_active_skill_session') {
-      const payload = await readActiveSkillSession()
-      return respond(id, {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({ ok: true, session: payload }, null, 2),
-          },
-        ],
-      })
-    }
-
-    if (toolName === 'canvas.activate_skill_session') {
-      const payload = await writeActiveSkillSession(params?.arguments ?? {})
-      return respond(id, {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({ ok: true, session: payload }, null, 2),
-          },
-        ],
-      })
-    }
-
-    if (toolName === 'canvas.clear_active_skill_session') {
-      await clearActiveSkillSession()
-      return respond(id, {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({ ok: true, session: null }, null, 2),
-          },
-        ],
-      })
-    }
-
     if (toolName === 'canvas.get_provider_status') {
       const providerSettings = await readProviderSettings(readJsonFile, providerSettingsPath, process.env)
       const payload = getProviderStatus(process.env, {
@@ -1109,14 +1060,6 @@ async function readCanvasAsset(args) {
   }
 }
 
-async function readActiveSkillSession() {
-  try {
-    return JSON.parse(await readFile(activeSkillSessionPath, 'utf8'))
-  } catch {
-    return null
-  }
-}
-
 async function readJsonFile(path, fallback) {
   try {
     return JSON.parse(await readFile(path, 'utf8'))
@@ -1130,38 +1073,6 @@ async function writeJson(path, data) {
   await writeFile(path, `${JSON.stringify(data, null, 2)}\n`)
 }
 
-async function writeActiveSkillSession(input = {}) {
-  const now = new Date().toISOString()
-  const previous = await readActiveSkillSession()
-  const skillName = typeof input.skillName === 'string' && input.skillName ? input.skillName : 'coflow-image'
-  const displayName = typeof input.displayName === 'string' && input.displayName ? input.displayName : 'CoFlow Image'
-  const outputMediaType = input.outputMediaType === 'video' ? 'video' : 'image'
-  const providerSettings = await readProviderSettings(readJsonFile, providerSettingsPath, process.env)
-  const provider = canonicalProviderId(
-    typeof input.provider === 'string' && input.provider
-      ? input.provider
-      : getDefaultProviderForMedia(providerSettings, outputMediaType)
-  )
-  const session = {
-    id: previous?.id || `active-skill:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-    status: 'active',
-    skillName,
-    displayName,
-    outputMediaType,
-    provider,
-    autoRun: input.autoRun !== false,
-    startedAt: previous?.startedAt || now,
-    updatedAt: now,
-  }
-  await mkdir(metadataRoot, { recursive: true })
-  await writeFile(activeSkillSessionPath, `${JSON.stringify(session, null, 2)}\n`)
-  return session
-}
-
-async function clearActiveSkillSession() {
-  await rm(activeSkillSessionPath, { force: true })
-}
-
 async function runProviderForMedia(args = {}) {
   const mediaType = args.mediaType === 'video' ? 'video' : 'image'
   const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
@@ -1173,11 +1084,19 @@ async function runProviderForMedia(args = {}) {
   }
 
   const references = normalizeProviderReferences(args.references)
-  const provider = canonicalProviderId(args.provider || defaultProviderForProviderRun(mediaType, references))
+  const requestedProvider = canonicalProviderId(args.provider || defaultProviderForProviderRun(mediaType, references))
+  const providerRedirect = providerRunRedirectForReferences({
+    mediaType,
+    provider: requestedProvider,
+    references,
+  })
+  const provider = providerRedirect?.to || requestedProvider
   const request = {
     id: `provider-request:${Date.now()}:${Math.random().toString(36).slice(2)}`,
     provider,
+    providerRedirect,
     model: typeof args.model === 'string' && args.model ? args.model : undefined,
+    providerOptions: normalizeProviderOptions(args.providerOptions),
     generationMode:
       typeof args.generationMode === 'string' && args.generationMode
         ? args.generationMode
@@ -1308,9 +1227,34 @@ function normalizeProviderReferences(references) {
     .filter(Boolean)
 }
 
+function normalizeProviderOptions(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) return undefined
+  const normalized = {}
+  for (const [key, value] of Object.entries(options)) {
+    if (!key || typeof key !== 'string') continue
+    if (value === undefined) continue
+    if (typeof value === 'function' || typeof value === 'symbol') continue
+    normalized[key] = value
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined
+}
+
 function defaultProviderForProviderRun(mediaType, references) {
   if (mediaType === 'video') return 'Atlas Cloud'
   return references.length > 0 ? 'Atlas Cloud' : 'codex-native'
+}
+
+function providerRunRedirectForReferences({ mediaType, provider, references }) {
+  if (mediaType !== 'image') return undefined
+  if (!references.length) return undefined
+  if (provider !== 'codex-native') return undefined
+
+  return {
+    from: 'codex-native',
+    to: 'Atlas Cloud',
+    reason:
+      'canvas.run_provider cannot execute Codex built-in image generation. Image edit/reference tasks with local canvas assets require a provider route that can receive local references.',
+  }
 }
 
 function inferProviderGenerationMode(mediaType, references) {

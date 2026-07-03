@@ -51,13 +51,11 @@ The canvas is a **visual context container and writeback surface**. Codex is the
 - Visible lineage arrow from source frame/context to generated result.
 - Floating annotation arrows that avoid tldraw target bindings.
 - Local canvas persistence with page snapshot, manifest, view state, and backups.
-- Active Skill Session metadata under `.coflow/metadata/active-skill-session.json`.
-- Minimal active-skill indicator in the canvas.
-- Frame action always keeps `Send to Codex`; `Generate version` is added only when active skill `autoRun` is enabled.
-- Active skill execution must be Codex-driven: the skill reads frame / selection / viewport context, chooses native/provider mode, generates media, then writes back through `canvas.insert_media` / `canvas.create_version`.
-- Phase 1 image loop target: frame + image + native annotations → active image Skill reads bounded context → Codex native prompt-only or reference-capable provider edit/generation → local output materialization → native tldraw image asset writeback → visible lineage arrow.
-- Phase 1 video loop target: frame/selection/viewport context → active video Skill reads bounded context → Atlas Cloud / Seedance 2.0 reference-to-video or text-to-video → local output materialization → native tldraw video asset writeback → visible lineage arrow.
-- `Generate version` immediately enters a visible generating state and disables repeat clicks for the active frame until the run finishes.
+- Active Skill Session has been removed from the product/runtime path. There is no `.coflow/metadata/active-skill-session.json` contract and no frame-level auto-run shortcut.
+- Frame action is `Send to Codex`: the skill reads frame / selection / viewport context, chooses native/provider mode, generates media, then writes back through `canvas.insert_media` / `canvas.create_version`.
+- Quick Edit is a separate selected-single-image inline prompt path for simple edits only.
+- Phase 1 image loop target: frame + image + native annotations → Codex image Skill reads bounded context → Codex native prompt-only or reference-capable provider edit/generation → local output materialization → native tldraw image asset writeback → visible lineage arrow.
+- Phase 1 video loop target: frame/selection/viewport context → Codex video Skill reads bounded context → Atlas Cloud / Seedance 2.0 reference-to-video or text-to-video → local output materialization → native tldraw video asset writeback → visible lineage arrow.
 - Default media generation actions no longer allow mock fallback unless `mock-provider` is explicitly selected for tests.
 - Generation context now follows the tldraw agent-style priority: active frame > selected objects > visible viewport > prompt only.
 - Image/video provider adapters no longer contain product-specific hard prompts such as poster/UI preservation rules. Skills build task-specific prompts from the user's message plus canvas context; adapters only keep light safety/annotation guardrails.
@@ -102,26 +100,30 @@ Send to Codex
 
 This button should not spend generation credits on its own.
 
-### 3.3 `Generate version` returns only inside active skill mode
+### 3.3 Quick Edit is separate from frame context
 
 Current Phase 1 behavior:
 
 ```text
-Active skill / auto-run mode is on
-→ user frames media + annotations
-→ Generate version
-→ canvas publishes fresh Frame Input with ready_to_execute status
-→ active Codex skill reads frame input
-→ active skill infers the generation mode
-→ real provider execution runs outside the browser canvas
+Frame / bounded multi-object task
+→ Send to Codex
+→ canvas publishes fresh Frame Input with awaiting_user_instruction status
+→ Codex Skill reads frame input and user instruction
+→ Skill infers generation mode
+→ real provider/native generation runs outside the browser canvas
+→ canvas writeback
+
+Single selected image quick edit
+→ Quick Edit inline prompt
+→ narrow provider execution
 → canvas writeback
 ```
 
-This preserves the low-friction Lovart/Cowart-style editing loop without turning the canvas into a provider form.
+This preserves the low-friction Lovart-style single-image editing loop without turning frames into provider forms.
 
 Important boundary:
 
-- Phase 1 uses the real provider boundary for active skill execution.
+- Phase 1 uses the real provider boundary for Codex Skill execution and the intentionally narrow Quick Edit path.
 - If provider credentials are missing or the provider fails, the canvas must show failure instead of inserting a mock image/video.
 - Real generation remains a Codex Skill/provider responsibility, not a browser canvas responsibility.
 
@@ -145,12 +147,11 @@ Those skills share the same canvas contract instead of each adding new whiteboar
 2. Upload or place media.
 3. Add annotations with notes/arrows/boxes.
 4. Frame the task region.
-5. Activate coflow-image, or keep an existing active image Skill session.
-6. Click Generate version on the frame.
-7. Browser publishes a fresh Frame Input and frame screenshot.
-8. Active image Skill reads the Frame Input and calls the real provider.
-9. Server materializes the provider result into local assets.
-10. Browser places the result next to the framed context with lineage.
+5. Click Send to Codex on the frame, or invoke `coflow-image` / `coflow-video` from Codex with the frame/selection visible.
+6. Browser publishes a fresh Frame Input and frame screenshot.
+7. Codex Skill reads the Frame Input and calls the real provider/native generation path.
+8. Server materializes the provider result into local assets.
+9. Browser places the result next to the framed context with lineage.
 ```
 
 Acceptance for Phase 1:
@@ -166,15 +167,15 @@ Acceptance for Phase 1:
 - After image/video generation succeeds, Codex responses must show an inline media preview in the conversation, not only a local file path.
 - The original image remains on canvas; the new image appears to the right with visible lineage.
 - Missing credentials or provider failure shows an error; it does not insert mock media.
-- `Send to Codex` remains available as the context bridge; `Generate version` is active-skill-only.
+- `Send to Codex` remains the frame context bridge; Quick Edit is single-image-only and not a frame action.
 
 ## 5. What remains incomplete after Phase 1 RC
 
 - `canvas.capture_selection` is currently a first-class structured MCP capture. Its primary path asks the open browser canvas for a fresh live tldraw editor snapshot, then returns current selection, active frame if available, and visible viewport fallback. Cached latest-selection files are fallback/debug only. It can include the latest matching Frame Input / frame screenshot artifacts. It does not yet ask the browser to create a fresh arbitrary selected-region PNG on demand.
 - When the fresh viewport contains multiple visible source images/media and the user has not selected/framed one, the image/video skill must not randomly choose a source. It should ask the user to select/frame/name the intended source, unless the user request is clearly standalone generation rather than editing.
 - `canvas.link_versions` exists as a separate MCP writeback tool and queues a visible, unbound lineage arrow between two existing shapes.
-- Direct provider executor code still exists for debugging/spike history and should be isolated further.
-- Active skill session mode is implemented for real provider-backed image/video loops.
+- Direct provider executor code exists only for explicit provider MCP calls and the narrow Quick Edit path; it must not be presented as a frame-level black-box generator.
+- Active skill session mode has been removed.
 - Image and video Skills are packaged as merged intent skills: each skill decides whether the request is text-to-media, reference-to-media, or edit/regeneration.
 - A first 3D workflow skill is now packaged as a Codex-side boundary. It does not yet claim native 3D canvas preview/editing.
 - Host-level automatic composer attachment is not available; screenshot copy remains best-effort.
@@ -189,9 +190,8 @@ Acceptance for Phase 1:
 Status: implementation complete, pending user acceptance with real image/video runs and three visible UX hardening items.
 
 1. Manual acceptance:
-   - activate `coflow-image`;
    - frame a source image plus annotation;
-   - click `Generate version`;
+   - click `Send to Codex`, then invoke/continue `coflow-image`;
    - verify the output is relevant, native, local, linked, and previewed inline in the Codex conversation.
 
 2. Stabilization:
@@ -336,7 +336,7 @@ What is already done:
 - `coflow-provider-setup`;
 - `coflow-open` reads onboarding state on open and only prompts when `shouldPrompt` is true;
 - provider/model defaults stored outside canvas JSON at `.coflow/metadata/provider-settings.json`;
-- active skill sessions can omit `provider` and use the configured image/video default;
+- image/video skills can omit explicit `provider` and use the configured image/video default;
 - `.env.local.example` defaults.
 
 Provider setup UX decision:
@@ -354,18 +354,13 @@ Phase 2.1 implementation boundary:
 
 Manual validation:
 
-```bash
-curl -X PUT http://127.0.0.1:5176/api/active-skill/session \
-  -H 'content-type: application/json' \
-  -d '{"skillName":"coflow-image","displayName":"Canvas Image Skill","outputMediaType":"image","provider":"atlas","autoRun":true}'
-```
-
-Then select a frame containing media and annotations:
+Select a frame containing media and annotations:
 
 ```text
-Generate version
-→ fresh Frame Input saved
-→ real provider output materialized locally
+Send to Codex
+→ fresh Frame Input saved with awaiting_user_instruction
+→ Codex Skill reads context and runs real generation
+→ provider/native output materialized locally
 → browser places a generated child media shape next to the frame
 → lineage arrow is drawn
 ```

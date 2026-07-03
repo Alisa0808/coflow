@@ -1,5 +1,4 @@
 import type { CanvasSelectionSnapshot, FrameContext } from './canvasContracts'
-import type { ProviderReadyGenerationRequest } from './generationContract'
 
 export type CanvasCommand = {
   id: string
@@ -42,18 +41,6 @@ export type CanvasCommand = {
   }>
 }
 
-export type ActiveSkillSession = {
-  id: string
-  status: 'active'
-  skillName: string
-  displayName: string
-  outputMediaType: 'image' | 'video'
-  provider: NonNullable<CanvasCommand['provider']>
-  autoRun: boolean
-  startedAt: string
-  updatedAt: string
-} | null
-
 export type MaterializeAssetInput = {
   shapeId: string
   assetId: string
@@ -75,7 +62,7 @@ export type CodexFrameRequestInput = {
   frameId: string
   promptPart: Record<string, unknown>
   defaultInstruction: string
-  status?: 'awaiting_user_instruction' | 'ready_to_execute'
+  status?: 'awaiting_user_instruction'
   summary?: {
     frameName?: string
     mediaCount: number
@@ -108,37 +95,6 @@ export type FrameScreenshot = {
   frameName?: string
   includedShapeIds?: string[]
   bytes: number
-}
-
-export type ExecutionResult = {
-  id: string
-  requestId: string
-  provider: string
-  status: 'succeeded' | 'failed' | 'processing'
-  selectedProviderPayload?: Record<string, unknown>
-  providerJob?: {
-    mode?: string
-    outputMediaType?: 'image' | 'video'
-    prompt?: string
-  }
-  externalExecution?: {
-    status?: string
-    request?: {
-      model?: string
-    }
-  }
-  mockFallback?: boolean
-  output: {
-    mediaType: 'image' | 'video'
-    localPath: string
-    absolutePath: string
-  }
-  preview: {
-    localPath: string
-    absolutePath: string
-    src: string
-  }
-  note?: string
 }
 
 export type PersistedCanvasDocument = {
@@ -257,24 +213,6 @@ export async function fetchPendingCommands(type?: CanvasCommand['type'], clientV
   return payload.commands ?? []
 }
 
-export async function loadActiveSkillSession(): Promise<ActiveSkillSession> {
-  const response = await fetch('/api/active-skill/session')
-  const payload = (await response.json()) as { ok: boolean; session?: ActiveSkillSession; error?: string }
-  if (!payload.ok) throw new Error(payload.error ?? 'Failed to load active skill session.')
-  return payload.session ?? null
-}
-
-export async function runActiveSkillFrame(input: { frameId: string; frameRequestId?: string; e2eStartedAt?: string }): Promise<CanvasCommand> {
-  const response = await fetch('/api/active-skill/run-frame', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(input),
-  })
-  const payload = (await response.json()) as { ok: boolean; command?: CanvasCommand; error?: string }
-  if (!payload.ok || !payload.command) throw new Error(payload.error ?? 'Failed to run active skill for frame.')
-  return payload.command
-}
-
 export async function materializeAsset(input: MaterializeAssetInput): Promise<MaterializedAsset> {
   const response = await fetch('/api/assets/materialize', {
     method: 'POST',
@@ -283,22 +221,4 @@ export async function materializeAsset(input: MaterializeAssetInput): Promise<Ma
   })
   const payload = (await response.json()) as { asset: MaterializedAsset }
   return payload.asset
-}
-
-export async function publishGenerationRequest(request: ProviderReadyGenerationRequest) {
-  await fetch('/api/generation-requests', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(request),
-  })
-}
-
-export async function runLatestGenerationRequest(): Promise<ExecutionResult | null> {
-  const response = await fetch('/api/executions/run-latest', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-  })
-  const payload = (await response.json()) as { ok: boolean; result?: ExecutionResult; error?: string }
-  if (!payload.ok) throw new Error(payload.error ?? 'Execution failed.')
-  return payload.result ?? null
 }

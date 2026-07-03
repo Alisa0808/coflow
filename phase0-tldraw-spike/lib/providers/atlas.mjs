@@ -53,6 +53,18 @@ export async function runAtlasProvider(payload, options = {}) {
     uploadedReferences,
     env,
   })
+  if (generationPayload.__coflowValidationError) {
+    finalizeTimings(timings, startedMs)
+    return {
+      status: 'failed',
+      provider: 'Atlas Cloud',
+      endpointConfigured: true,
+      request: generationPayload.request,
+      uploadedReferences,
+      timings,
+      error: generationPayload.__coflowValidationError,
+    }
+  }
   const submitPath = outputType === 'video' ? '/model/generateVideo' : '/model/generateImage'
   const submitEndpoint = `${baseUrl}${submitPath}`
   const submitStartedMs = Date.now()
@@ -152,51 +164,372 @@ function buildAtlasGenerationPayload(payload, { outputType, prompt, uploadedRefe
   }
 
   if (outputType === 'video') {
-    request.duration = Number(env.ATLASCLOUD_VIDEO_DURATION || 5)
-    request.resolution = env.ATLASCLOUD_VIDEO_RESOLUTION || '720p'
-    request.ratio = resolveAtlasVideoRatio({ payload, prompt, env })
-    request.bitrate_mode = env.ATLASCLOUD_VIDEO_BITRATE_MODE || 'standard'
-    request.generate_audio = env.ATLASCLOUD_VIDEO_AUDIO !== 'false'
-    request.watermark = env.ATLASCLOUD_VIDEO_WATERMARK === 'true'
-    request.return_last_frame = env.ATLASCLOUD_VIDEO_RETURN_LAST_FRAME === 'true'
+    const videoPayload = buildAtlasVideoPayload({
+      payload,
+      prompt,
+      env,
+      model,
+      uploadedReferences,
+    })
+    if (videoPayload.error) {
+      return {
+        request,
+        __coflowValidationError: videoPayload.error,
+      }
+    }
+    Object.assign(request, videoPayload.fields)
   } else {
     request.size = env.ATLASCLOUD_IMAGE_SIZE || '1024x1024'
   }
 
-  if (hasReference) {
+  if (hasReference && outputType === 'image') {
     if (outputType === 'image') {
       request.images = uploadedReferences
         .filter((reference) => reference.type === 'image')
         .map((reference) => reference.download_url)
         .filter(Boolean)
-    } else {
-      const imageUrls = uploadedReferences
-        .filter((reference) => reference.type === 'image')
-        .map((reference) => reference.download_url)
-        .filter(Boolean)
-      const videoUrls = uploadedReferences
-        .filter((reference) => reference.type === 'video')
-        .map((reference) => reference.download_url)
-        .filter(Boolean)
-      const audioUrls = uploadedReferences
-        .filter((reference) => reference.type === 'audio')
-        .map((reference) => reference.download_url)
-        .filter(Boolean)
-
-      if (imageUrls.length > 0) request.reference_images = imageUrls
-      if (videoUrls.length > 0) request.reference_videos = videoUrls
-      if (audioUrls.length > 0) request.reference_audios = audioUrls
     }
   }
 
   return request
 }
 
+function buildAtlasVideoPayload({ payload, prompt, env, model, uploadedReferences }) {
+  const route = atlasVideoRoute(model)
+  const fields = {}
+  const imageUrls = referenceUrls(uploadedReferences, 'image')
+  const videoUrls = referenceUrls(uploadedReferences, 'video')
+  const audioUrls = referenceUrls(uploadedReferences, 'audio')
+  const videoOptions = resolveAtlasVideoOptions({ payload, prompt, env })
+
+  if (route === 'text-to-video') {
+    assignVideoOptions(fields, videoOptions, [
+      'duration',
+      'resolution',
+      'ratio',
+      'bitrate_mode',
+      'generate_audio',
+      'watermark',
+      'return_last_frame',
+      'web_search',
+    ])
+    return { fields }
+  }
+
+  if (route === 'image-to-video') {
+    if (!imageUrls[0]) return { error: `${model} requires an image reference.` }
+    if (model === 'xai/grok-imagine-video-v1.5/image-to-video') {
+      fields.image_url = imageUrls[0]
+      assignVideoOptions(fields, videoOptions, ['aspect_ratio'])
+      return { fields }
+    }
+    fields.image = imageUrls[0]
+    assignVideoOptions(fields, videoOptions, [
+      'duration',
+      'resolution',
+      'ratio',
+      'bitrate_mode',
+      'generate_audio',
+      'watermark',
+      'return_last_frame',
+    ])
+    return { fields }
+  }
+
+  if (route === 'reference-to-video') {
+    if (model.startsWith('alibaba/happyhorse-')) {
+      if (imageUrls.length === 0) return { error: `${model} requires one or more image references.` }
+      fields.images = imageUrls
+      assignVideoOptions(fields, videoOptions, ['duration', 'resolution', 'ratio', 'seed'])
+      return { fields }
+    }
+
+    if (imageUrls.length === 0) return { error: `${model} requires one or more image references.` }
+    fields.reference_images = imageUrls
+    if (audioUrls.length > 0) fields.reference_audios = audioUrls
+    assignVideoOptions(fields, videoOptions, [
+      'duration',
+      'resolution',
+      'ratio',
+      'bitrate_mode',
+      'generate_audio',
+      'watermark',
+      'return_last_frame',
+    ])
+    return { fields }
+  }
+
+  if (route === 'video-edit') {
+    if (!videoUrls[0]) return { error: `${model} requires a video reference.` }
+
+    if (model.startsWith('kwaivgi/kling-video-o3-')) {
+      fields.video = videoUrls[0]
+      fields.images = imageUrls
+      fields.keep_original_sound = resolveAtlasVideoBoolean({
+        payload,
+        prompt,
+        env,
+        optionNames: ['keep_original_sound', 'keepOriginalSound'],
+        envKey: 'ATLASCLOUD_VIDEO_KEEP_ORIGINAL_SOUND',
+        defaultValue: true,
+        positivePatterns: [/(保留原声|keep\s+original\s+sound|original\s+sound)/i],
+        negativePatterns: [/(不要原声|移除原声|no\s+original\s+sound|without\s+original\s+sound)/i],
+      })
+      if (model.includes('-pro/')) assignVideoOptions(fields, videoOptions, ['duration', 'aspect_ratio'])
+      return { fields }
+    }
+
+    if (model.startsWith('alibaba/wan-')) {
+      fields.video = videoUrls[0]
+      if (imageUrls[0]) fields.image = imageUrls[0]
+      assignVideoOptions(fields, videoOptions, ['duration', 'resolution', 'ratio', 'prompt_extend', 'seed'])
+      return { fields }
+    }
+
+    fields.video = videoUrls[0]
+    if (imageUrls.length > 0) fields.images = imageUrls
+    assignVideoOptions(fields, videoOptions, ['duration', 'resolution', 'ratio'])
+    return { fields }
+  }
+
+  if (route === 'extend-video' || route === 'edit-video') {
+    if (!videoUrls[0]) return { error: `${model} requires a video reference.` }
+    fields.video_url = videoUrls[0]
+    if (route === 'extend-video') assignVideoOptions(fields, videoOptions, ['duration'])
+    return { fields }
+  }
+
+  if (imageUrls.length > 0) {
+    fields.reference_images = imageUrls
+  }
+  if (videoUrls.length > 0) {
+    fields.video = videoUrls[0]
+  }
+  assignVideoOptions(fields, videoOptions, ['duration', 'resolution', 'ratio'])
+  return { fields }
+}
+
+function atlasVideoRoute(model) {
+  const text = String(model || '')
+  if (text.endsWith('/text-to-video')) return 'text-to-video'
+  if (text.endsWith('/image-to-video')) return 'image-to-video'
+  if (text.endsWith('/reference-to-video')) return 'reference-to-video'
+  if (text.endsWith('/video-edit')) return 'video-edit'
+  if (text.endsWith('/extend-video')) return 'extend-video'
+  if (text.endsWith('/edit-video')) return 'edit-video'
+  return 'unknown'
+}
+
+function referenceUrls(uploadedReferences, type) {
+  return uploadedReferences
+    .filter((reference) => reference.type === type)
+    .map((reference) => reference.download_url)
+    .filter(Boolean)
+}
+
+function resolveAtlasVideoOptions({ payload, prompt, env }) {
+  const ratio = resolveAtlasVideoRatio({ payload, prompt, env })
+  return {
+    duration: resolveAtlasVideoDuration({ payload, prompt, env }),
+    resolution: resolveAtlasVideoResolution({ payload, prompt, env }),
+    ratio,
+    aspect_ratio: ratio === 'adaptive' ? undefined : ratio,
+    bitrate_mode: resolveAtlasVideoBitrateMode({ payload, prompt, env }),
+    generate_audio: resolveAtlasVideoBoolean({
+      payload,
+      prompt,
+      env,
+      optionNames: ['generate_audio', 'generateAudio', 'audio'],
+      envKey: 'ATLASCLOUD_VIDEO_AUDIO',
+      defaultValue: true,
+      positivePatterns: [/(有声音|带声音|生成音频|音频|配音|with\s+audio|audio\s+on|generate\s+audio)/i],
+      negativePatterns: [/(无声|静音|不要声音|不生成音频|不带声音|no\s+audio|without\s+audio|mute|muted|silent)/i],
+    }),
+    watermark: resolveAtlasVideoBoolean({
+      payload,
+      prompt,
+      env,
+      optionNames: ['watermark'],
+      envKey: 'ATLASCLOUD_VIDEO_WATERMARK',
+      defaultValue: false,
+      positivePatterns: [/(加水印|带水印|保留水印|with\s+watermark|watermark\s+on)/i],
+      negativePatterns: [/(无水印|不要水印|去水印|不带水印|without\s+watermark|no\s+watermark|watermark\s+off)/i],
+    }),
+    return_last_frame: resolveAtlasVideoBoolean({
+      payload,
+      prompt,
+      env,
+      optionNames: ['return_last_frame', 'returnLastFrame', 'lastFrame'],
+      envKey: 'ATLASCLOUD_VIDEO_RETURN_LAST_FRAME',
+      defaultValue: false,
+      positivePatterns: [/(返回最后一帧|输出最后一帧|保留最后一帧|return\s+last\s+frame|last\s+frame)/i],
+      negativePatterns: [/(不返回最后一帧|不要最后一帧|不要返回最后一帧|no\s+last\s+frame|without\s+last\s+frame)/i],
+    }),
+    web_search: booleanFromValue(videoOption(payload, ['web_search', 'webSearch'])),
+    prompt_extend: booleanFromValue(videoOption(payload, ['prompt_extend', 'promptExtend'])),
+    seed: numberFromValue(videoOption(payload, ['seed'])),
+  }
+}
+
+function assignVideoOptions(target, options, names) {
+  for (const name of names) {
+    const value = options[name]
+    if (value !== undefined) target[name] = value
+  }
+}
+
+function resolveAtlasVideoDuration({ payload, prompt, env }) {
+  const structured = videoOption(payload, ['duration', 'durationSeconds', 'seconds'])
+  const structuredNumber = numberFromValue(structured)
+  if (structuredNumber) return structuredNumber
+
+  const promptDuration = durationFromPrompt(prompt)
+  if (promptDuration) return promptDuration
+
+  return Number(env.ATLASCLOUD_VIDEO_DURATION || 5)
+}
+
+function resolveAtlasVideoResolution({ payload, prompt, env }) {
+  const structured = videoOption(payload, ['resolution', 'quality'])
+  const structuredResolution = resolutionFromValue(structured)
+  if (structuredResolution) return structuredResolution
+
+  const promptResolution = resolutionFromPrompt(prompt)
+  if (promptResolution) return promptResolution
+
+  return env.ATLASCLOUD_VIDEO_RESOLUTION || '720p'
+}
+
 function resolveAtlasVideoRatio({ payload, prompt, env }) {
+  const structured = videoOption(payload, ['ratio', 'aspectRatio', 'aspect_ratio'])
+  const structuredRatio = ratioFromValue(structured)
+  if (structuredRatio) return structuredRatio
+
   const promptRatio = ratioFromPrompt(prompt)
   if (promptRatio) return `${promptRatio.w}:${promptRatio.h}`
 
   return 'adaptive'
+}
+
+function resolveAtlasVideoBitrateMode({ payload, prompt, env }) {
+  const structured = videoOption(payload, ['bitrate_mode', 'bitrateMode', 'bitrate'])
+  const structuredBitrate = bitrateModeFromValue(structured)
+  if (structuredBitrate) return structuredBitrate
+
+  const promptBitrate = bitrateModeFromPrompt(prompt)
+  if (promptBitrate) return promptBitrate
+
+  return env.ATLASCLOUD_VIDEO_BITRATE_MODE || 'standard'
+}
+
+function resolveAtlasVideoBoolean({
+  payload,
+  prompt,
+  env,
+  optionNames,
+  envKey,
+  defaultValue,
+  positivePatterns,
+  negativePatterns,
+}) {
+  const structured = videoOption(payload, optionNames)
+  const structuredBoolean = booleanFromValue(structured)
+  if (structuredBoolean !== undefined) return structuredBoolean
+
+  const text = String(prompt || '')
+  for (const pattern of negativePatterns) {
+    if (pattern.test(text)) return false
+  }
+  for (const pattern of positivePatterns) {
+    if (pattern.test(text)) return true
+  }
+
+  const envBoolean = booleanFromValue(env[envKey])
+  return envBoolean === undefined ? defaultValue : envBoolean
+}
+
+function videoOption(payload, names) {
+  const containers = [payload?.providerOptions, payload?.options, payload?.params, payload]
+  for (const container of containers) {
+    if (!container || typeof container !== 'object' || Array.isArray(container)) continue
+    for (const name of names) {
+      if (container[name] !== undefined) return container[name]
+    }
+  }
+  return undefined
+}
+
+function durationFromPrompt(prompt) {
+  const text = String(prompt || '')
+  const secondMatch = text.match(/(?:^|[^\d.])(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds|秒)(?:[^\w]|$)/i)
+  if (secondMatch) return Number(secondMatch[1])
+
+  const minuteMatch = text.match(/(?:^|[^\d.])(\d+(?:\.\d+)?)\s*(?:min|mins|minute|minutes|分钟)(?:[^\w]|$)/i)
+  if (minuteMatch) return Number(minuteMatch[1]) * 60
+
+  return undefined
+}
+
+function resolutionFromPrompt(prompt) {
+  const text = String(prompt || '')
+  const pMatch = text.match(/\b(480|720|1080|1440|2160)\s*p\b/i)
+  if (pMatch) return `${pMatch[1]}p`
+
+  const kMatch = text.match(/\b([248])\s*k\b/i)
+  if (kMatch) return `${kMatch[1].toUpperCase()}K`
+
+  return undefined
+}
+
+function bitrateModeFromPrompt(prompt) {
+  const text = String(prompt || '')
+  if (/(高码率|高比特率|高质量|high\s+bitrate|high\s+quality)/i.test(text)) return 'high'
+  if (/(低码率|低比特率|low\s+bitrate)/i.test(text)) return 'low'
+  if (/(标准码率|标准比特率|standard\s+bitrate)/i.test(text)) return 'standard'
+  return undefined
+}
+
+function numberFromValue(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+  if (typeof value === 'string') {
+    const number = Number(value.trim())
+    if (Number.isFinite(number) && number > 0) return number
+    return durationFromPrompt(value)
+  }
+  return undefined
+}
+
+function resolutionFromValue(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return `${value}p`
+  if (typeof value !== 'string') return undefined
+  const text = value.trim()
+  if (/^\d+p$/i.test(text)) return text.toLowerCase()
+  if (/^[248]k$/i.test(text)) return text.toUpperCase()
+  return resolutionFromPrompt(text)
+}
+
+function ratioFromValue(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined
+  const text = String(value).trim()
+  const ratio = ratioFromPrompt(text)
+  return ratio ? `${ratio.w}:${ratio.h}` : undefined
+}
+
+function bitrateModeFromValue(value) {
+  if (typeof value !== 'string') return undefined
+  const text = value.trim().toLowerCase()
+  if (['low', 'standard', 'high'].includes(text)) return text
+  return bitrateModeFromPrompt(text)
+}
+
+function booleanFromValue(value) {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value === 1 ? true : value === 0 ? false : undefined
+  if (typeof value !== 'string') return undefined
+  const text = value.trim().toLowerCase()
+  if (['true', '1', 'yes', 'y', 'on', 'enabled'].includes(text)) return true
+  if (['false', '0', 'no', 'n', 'off', 'disabled'].includes(text)) return false
+  return undefined
 }
 
 function ratioFromPrompt(prompt) {

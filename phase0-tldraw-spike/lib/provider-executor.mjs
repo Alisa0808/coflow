@@ -23,6 +23,10 @@ export function buildProviderJob(request) {
     requestId: request.id,
     mode: request.generationMode || request.kind || 'generation',
     model: request.model,
+    providerOptions:
+      request.providerOptions && typeof request.providerOptions === 'object' && !Array.isArray(request.providerOptions)
+        ? request.providerOptions
+        : undefined,
     outputMediaType: request.output?.mediaType === 'video' ? 'video' : 'image',
     prompt: request.instructions?.prompt || '',
     inputs: Array.isArray(request.references)
@@ -46,6 +50,7 @@ export function buildProviderPayloads(job) {
       model: job.model,
       mode: job.mode,
       prompt: job.prompt,
+      providerOptions: job.providerOptions,
       output: {
         type: job.outputMediaType,
         localPath: job.outputLocalPath,
@@ -56,6 +61,7 @@ export function buildProviderPayloads(job) {
       model: 'seedance-reference-video',
       mode: job.mode === 'text_to_video' ? 'text_to_video' : 'reference_to_video',
       prompt: job.prompt,
+      providerOptions: job.providerOptions,
       references: job.inputs.map(toProviderReference),
       output: {
         mediaType: job.outputMediaType,
@@ -66,6 +72,7 @@ export function buildProviderPayloads(job) {
       model: 'kling-reference-video',
       task: job.inputs.length > 0 ? 'edit' : 'generate',
       prompt: job.prompt,
+      providerOptions: job.providerOptions,
       referenceAssets: job.inputs.map(toProviderReference),
       output: {
         mediaType: job.outputMediaType,

@@ -3,6 +3,7 @@ export function buildProviderOnboarding({ providerSettings, providerStatus, sett
   const imageDefault = summarizeImageDefault(providerSettings, providerStatus)
   const videoDefault = summarizeVideoDefault(providerSettings, providerStatus)
   const runtimeCredentialCheckRequired = Boolean(providerStatus?.onboarding?.runtimeCredentialCheckRequired)
+  const atlasConnected = Boolean(providerStatus?.providers?.atlas?.configured)
   const providerSkillName = PROVIDER_SETUP_SKILL_NAME
 
   return {
@@ -15,10 +16,14 @@ export function buildProviderOnboarding({ providerSettings, providerStatus, sett
     skipped: status === 'skipped',
     generationReady: !runtimeCredentialCheckRequired,
     runtimeCredentialCheckRequired,
+    connectionStatus: {
+      codexBuiltInImageModel: 'ready',
+      atlasCloud: atlasConnected ? 'connected' : 'needs_api_key',
+    },
     settingsPath,
     imageDefault,
     videoDefault,
-    userMessage: buildUserMessage({ status, imageDefault, videoDefault }),
+    userMessage: buildUserMessage({ status, atlasConnected }),
     actions: buildActions({ status, imageDefault, videoDefault, providerSkillName }),
     providerSkillName,
   }
@@ -54,11 +59,13 @@ function summarizeVideoDefault(providerSettings, providerStatus) {
 }
 
 function buildActions({ status, imageDefault, videoDefault, providerSkillName }) {
-  const configureDefaults = {
-    id: 'use_default_provider_models',
-    label: 'Use default provider/model settings',
-    description: 'Save the current image and video provider/model defaults without storing credentials.',
+  const keepDefaultsAndSetupAtlas = {
+    id: 'keep_defaults_setup_atlas_cloud',
+    label: 'Keep defaults and set up Atlas Cloud',
+    description: 'Use Codex built-in GPT Image 2 for images and Atlas Cloud Seedance 2.0 for videos, then check whether the Atlas Cloud API key is connected.',
     toolName: 'canvas.set_provider_settings',
+    nextStep: 'check_atlas_cloud_key',
+    requiresProviderCredentialCheck: true,
     arguments: {
       status: 'configured',
       image: imageDefault,
@@ -66,15 +73,15 @@ function buildActions({ status, imageDefault, videoDefault, providerSkillName })
     },
   }
   const customize = {
-    id: 'customize_provider_models',
-    label: 'Customize provider/model settings',
-    description: `Use the ${providerSkillName} skill to choose different image or video defaults.`,
+    id: 'customize_providers_and_models',
+    label: 'Customize providers and models',
+    description: `Use the ${providerSkillName} skill to choose CoFlow's configured image/video models or add a custom provider profile.`,
     skillName: providerSkillName,
   }
   const skipForNow = {
     id: 'skip_for_now',
     label: 'Skip for now',
-    description: 'Keep the canvas usable and ask again only when the user reruns provider setup.',
+    description: 'Keep the canvas usable. Provider setup can run later when generation needs it.',
     toolName: 'canvas.set_provider_settings',
     arguments: {
       status: 'skipped',
@@ -88,29 +95,53 @@ function buildActions({ status, imageDefault, videoDefault, providerSkillName })
   }
 
   if (status === 'configured') return [customize, rerunSetup]
-  if (status === 'skipped') return [rerunSetup, configureDefaults]
-  return [configureDefaults, customize, skipForNow]
+  if (status === 'skipped') return [rerunSetup, keepDefaultsAndSetupAtlas]
+  return [keepDefaultsAndSetupAtlas, customize, skipForNow]
 }
 
-function buildUserMessage({ status, imageDefault, videoDefault }) {
+function buildUserMessage({ status, atlasConnected }) {
   if (status === 'configured') {
-    return `Provider/model defaults are configured. Image: ${providerDisplayName(imageDefault)} / ${imageDefault.modelIntent}. Video: ${providerDisplayName(videoDefault)} / ${videoDefault.modelIntent}.`
+    if (atlasConnected) {
+      return 'Atlas Cloud is connected. CoFlow can now generate images with Codex built-in GPT Image 2 and videos with Atlas Cloud Seedance 2.0.'
+    }
+    return [
+      'CoFlow defaults are saved, but Atlas Cloud is not connected yet.',
+      '',
+      'Current defaults:',
+      '- Image generation: Codex built-in GPT Image 2',
+      '- Image editing: Codex built-in GPT Image 2',
+      '- Text-to-video: Atlas Cloud Seedance 2.0',
+      '- Reference/video editing: Atlas Cloud Seedance 2.0',
+      '',
+      'Connection status:',
+      '- Codex built-in image model: Ready',
+      '- Atlas Cloud: Needs API key',
+      '',
+      'Create an Atlas Cloud API key here:',
+      'https://www.atlascloud.ai/console/api-keys?utm_source=coflow&ref=F27PTG',
+      '',
+      'CoFlow does not currently have an API-key input inside the canvas UI.',
+      'To connect Atlas Cloud, ask Codex to save the key to the local CoFlow environment, or manually add `ATLASCLOUD_API_KEY` to your local CoFlow `.env.local` file and restart CoFlow.',
+    ].join('\n')
   }
   if (status === 'skipped') {
-    return `Provider/model setup was skipped. You can rerun ${PROVIDER_SETUP_SKILL_NAME} when you want to change defaults.`
+    return 'You can use Codex built-in GPT Image 2 for image tasks. Video generation and Atlas Cloud models will require setup later.'
   }
-  return `Welcome to CoFlow. Choose provider/model defaults now, or skip setup and keep using the canvas. Current defaults are Image: ${providerDisplayName(imageDefault)} / ${imageDefault.modelIntent}; Video: ${providerDisplayName(videoDefault)} / ${videoDefault.modelIntent}.`
+  return [
+    'CoFlow is ready to use with these defaults:',
+    '',
+    '- Image generation and image editing: Codex built-in GPT Image 2',
+    '- Video generation and video editing: Atlas Cloud Seedance 2.0',
+    '',
+    'To use the default video workflow, connect your Atlas Cloud API key.',
+  ].join('\n')
 }
 
 function providerLabel(provider) {
   const canonical = canonicalProviderId(provider)
-  if (canonical === 'codex-native') return 'Codex'
+  if (canonical === 'codex-native') return 'Codex built-in GPT Image 2'
   if (canonical === 'Atlas Cloud') return 'Atlas Cloud'
   return provider
-}
-
-function providerDisplayName(defaults) {
-  return defaults?.providerLabel || providerLabel(defaults?.provider)
 }
 
 function canonicalProviderId(provider) {

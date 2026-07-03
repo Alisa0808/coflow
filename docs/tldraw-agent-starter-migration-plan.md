@@ -260,7 +260,7 @@ The starter kit already has the lifecycle shape for this.
 | custom frame JSON side panel | replace | prompt parts + chat/action history |
 | manual `Read frame context` button | mostly replace | prompt parts gathered per request |
 | frame `Send to Codex` button | keep as default bridge | publish Frame Input, screenshot, and pending request |
-| frame `Generate version` button | keep only in active skill / auto-run mode | `agent.prompt({ bounds, activeSkill })` |
+| frame `Generate version` button | remove from current runtime; only reconsider later if it can route through a real Codex callback/task mechanism | `agent.prompt({ bounds, invokedSkill, frameInput })` |
 | custom generation request schema | keep, wrap as action payload | `generate-media` action schema |
 | provider payload builders | keep | called by `GenerateMediaActionUtil` |
 | mock executor / Atlas executor | keep | action implementation backend |
@@ -469,7 +469,7 @@ The official starter keeps tldraw UI mostly native and adds agent-specific overl
 
 The default button is `Send to Codex`: it publishes context and waits for Codex/user instruction.
 
-`Generate version` should still exist later, but only when the user has already activated a scenario skill or auto-run mode. In that state the button means “run the current active skill against this bounded frame,” not “the browser should choose a provider and call an API.”
+`Generate version` may return later, but not through active skill session state and not through browser-direct provider execution. If it returns, the button must mean “send this bounded frame into a real Codex callback/task flow, let Codex pick the invoked skill/provider/model, then write back through canvas tools.”
 
 The canonical action remains:
 

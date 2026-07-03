@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -63,7 +63,7 @@ function createMcpClient(workspaceRoot) {
   }
 }
 
-test('MCP lists capture_selection, provider tools, link_versions, and active skill tools', async () => {
+test('MCP lists capture_selection, provider tools, and link_versions without direct generation/session tools', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
   const client = createMcpClient(workspaceRoot)
   try {
@@ -80,8 +80,9 @@ test('MCP lists capture_selection, provider tools, link_versions, and active ski
     assert.equal(toolNames.includes('canvas.generate_video'), false)
     assert.equal(toolNames.includes('canvas.agent_prompt'), false)
     assert.ok(toolNames.includes('canvas.link_versions'))
-    assert.ok(toolNames.includes('canvas.activate_skill_session'))
-    assert.ok(toolNames.includes('canvas.get_active_skill_session'))
+    assert.equal(toolNames.includes('canvas.activate_skill_session'), false)
+    assert.equal(toolNames.includes('canvas.get_active_skill_session'), false)
+    assert.equal(toolNames.includes('canvas.clear_active_skill_session'), false)
   } finally {
     await client.close()
     await rm(workspaceRoot, { recursive: true, force: true })
@@ -171,10 +172,14 @@ test('provider onboarding can be read over MCP without exposing secrets', async 
     assert.equal(payload.status, 'not_started')
     assert.equal(payload.shouldPrompt, true)
     assert.equal(payload.imageDefault.provider, 'codex-native')
-    assert.equal(payload.imageDefault.providerLabel, 'Codex')
+    assert.equal(payload.imageDefault.providerLabel, 'Codex built-in GPT Image 2')
     assert.equal(payload.videoDefault.provider, 'Atlas Cloud')
     assert.equal(payload.videoDefault.providerLabel, 'Atlas Cloud')
-    assert.ok(payload.actions.some((action) => action.id === 'use_default_provider_models'))
+    assert.equal(payload.connectionStatus.codexBuiltInImageModel, 'ready')
+    assert.equal(payload.connectionStatus.atlasCloud, 'needs_api_key')
+    assert.match(payload.userMessage, /CoFlow is ready to use with these defaults/)
+    assert.ok(payload.actions.some((action) => action.id === 'keep_defaults_setup_atlas_cloud'))
+    assert.ok(payload.actions.some((action) => action.id === 'customize_providers_and_models'))
     assert.ok(payload.actions.some((action) => action.id === 'skip_for_now'))
     assert.equal(text.includes(process.env.ATLASCLOUD_API_KEY || 'unlikely-secret-value'), false)
   } finally {
@@ -200,6 +205,19 @@ test('provider settings can be read and updated over MCP without storing secrets
           provider: 'atlas',
           modelIntent: 'reference_to_video',
         },
+        customProviders: {
+          'my-provider': {
+            label: 'My Provider',
+            mediaTypes: ['image', 'video'],
+            modes: ['image_edit', 'reference_to_video'],
+            models: ['my-image-edit', 'my-video-ref'],
+            baseUrl: 'https://provider.example.test',
+            authEnv: 'MY_PROVIDER_API_KEY',
+            docsUrl: 'https://provider.example.test/docs',
+            submitEndpoint: '/v1/generate',
+            responseOutputPath: 'data.output_url',
+          },
+        },
       },
     })
     const updatePayload = JSON.parse(updated.result.content[0].text)
@@ -215,6 +233,10 @@ test('provider settings can be read and updated over MCP without storing secrets
     const currentPayload = JSON.parse(current.result.content[0].text)
     assert.equal(currentPayload.settings.status, 'configured')
     assert.equal(currentPayload.settings.video.modelIntent, 'reference_to_video')
+    assert.equal(currentPayload.settings.customProviders['my-provider'].label, 'My Provider')
+    assert.equal(currentPayload.settings.customProviders['my-provider'].authEnv, 'MY_PROVIDER_API_KEY')
+    assert.equal(currentPayload.settings.customProviders['my-provider'].docsUrl, 'https://provider.example.test/docs')
+    assert.equal(currentPayload.settings.customProviders['my-provider'].models[1], 'my-video-ref')
 
     const status = await client.call('tools/call', {
       name: 'canvas.get_provider_status',
@@ -222,48 +244,6 @@ test('provider settings can be read and updated over MCP without storing secrets
     })
     const statusPayload = JSON.parse(status.result.content[0].text)
     assert.equal(statusPayload.onboarding.status, 'configured')
-  } finally {
-    await client.close()
-    await rm(workspaceRoot, { recursive: true, force: true })
-  }
-})
-
-test('active skill session can be activated and cleared over MCP', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
-  const client = createMcpClient(workspaceRoot)
-  try {
-    await client.call('initialize')
-    const activated = await client.call('tools/call', {
-      name: 'canvas.activate_skill_session',
-      arguments: {
-        skillName: 'coflow-image',
-        displayName: 'CoFlow Image',
-        outputMediaType: 'image',
-        provider: 'atlas',
-        autoRun: true,
-      },
-    })
-    const activatePayload = JSON.parse(activated.result.content[0].text)
-    assert.equal(activatePayload.ok, true)
-    assert.equal(activatePayload.session.status, 'active')
-    assert.equal(activatePayload.session.skillName, 'coflow-image')
-    assert.equal(activatePayload.session.provider, 'Atlas Cloud')
-    assert.equal(activatePayload.session.autoRun, true)
-
-    const current = await client.call('tools/call', {
-      name: 'canvas.get_active_skill_session',
-      arguments: {},
-    })
-    const currentPayload = JSON.parse(current.result.content[0].text)
-    assert.equal(currentPayload.session.displayName, 'CoFlow Image')
-
-    const cleared = await client.call('tools/call', {
-      name: 'canvas.clear_active_skill_session',
-      arguments: {},
-    })
-    const clearedPayload = JSON.parse(cleared.result.content[0].text)
-    assert.equal(clearedPayload.ok, true)
-    assert.equal(clearedPayload.session, null)
   } finally {
     await client.close()
     await rm(workspaceRoot, { recursive: true, force: true })
@@ -318,6 +298,51 @@ test('run_provider rejects prompt-only Codex native image generation as runtime-
     assert.equal(payload.ok, false)
     assert.equal(payload.status, 'requires_codex_native')
     assert.equal(payload.provider, 'codex-native')
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('run_provider redirects Codex native image reference tasks to a reference-capable provider', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const imageDir = join(workspaceRoot, '.coflow', 'assets', 'images')
+  const sourceLocalPath = '.coflow/assets/images/source.png'
+  await mkdir(imageDir, { recursive: true })
+  await writeFile(join(imageDir, 'source.png'), Buffer.from('fake png fixture'))
+
+  const client = createMcpClient(workspaceRoot)
+  try {
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.run_provider',
+      arguments: {
+        mediaType: 'image',
+        provider: 'codex-native',
+        generationMode: 'image_edit',
+        prompt: 'Make the horse green.',
+        references: [
+          {
+            mediaType: 'image',
+            role: 'source',
+            localPath: sourceLocalPath,
+          },
+        ],
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, false)
+    assert.equal(payload.status, 'provider_not_configured')
+    assert.equal(payload.provider, 'Atlas Cloud')
+    assert.equal(payload.request.provider, 'Atlas Cloud')
+    assert.equal(payload.request.providerRedirect.from, 'codex-native')
+    assert.equal(payload.request.providerRedirect.to, 'Atlas Cloud')
+    assert.match(payload.request.providerRedirect.reason, /cannot execute Codex built-in/)
+
+    await assert.rejects(
+      readFile(join(workspaceRoot, '.coflow', 'commands', 'pending.jsonl'), 'utf8'),
+      /ENOENT/
+    )
   } finally {
     await client.close()
     await rm(workspaceRoot, { recursive: true, force: true })
@@ -409,42 +434,6 @@ test('create_version derives media path fields from a .coflow absolute path', as
     assert.equal(payload.command.mediaType, 'video')
     assert.equal(payload.command.localPath, '.coflow/assets/videos/generated-horse.mp4')
     assert.equal(payload.command.src, '/asset-store/assets/videos/generated-horse.mp4')
-  } finally {
-    await client.close()
-    await rm(workspaceRoot, { recursive: true, force: true })
-  }
-})
-
-test('active skill session uses configured media provider default when provider is omitted', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
-  const client = createMcpClient(workspaceRoot)
-  try {
-    await client.call('initialize')
-    await client.call('tools/call', {
-      name: 'canvas.set_provider_settings',
-      arguments: {
-        status: 'configured',
-        image: {
-          provider: 'custom-image',
-          modelIntent: 'image_edit',
-        },
-        video: {
-          provider: 'custom-video',
-          modelIntent: 'reference_to_video',
-        },
-      },
-    })
-    const activated = await client.call('tools/call', {
-      name: 'canvas.activate_skill_session',
-      arguments: {
-        skillName: 'coflow-video',
-        displayName: 'CoFlow Video',
-        outputMediaType: 'video',
-        autoRun: true,
-      },
-    })
-    const activatePayload = JSON.parse(activated.result.content[0].text)
-    assert.equal(activatePayload.session.provider, 'custom-video')
   } finally {
     await client.close()
     await rm(workspaceRoot, { recursive: true, force: true })
