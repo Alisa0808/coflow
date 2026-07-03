@@ -5,12 +5,13 @@ export async function prepareProviderExecution(request, env = process.env) {
   const providerPayloads = buildProviderPayloads(providerJob)
   const providerKey = normalizeProviderKey(request.provider)
   const selectedProviderPayload = providerPayloads[providerKey] ?? providerPayloads.atlas
-  const externalExecution = await runExternalProviderIfConfigured(selectedProviderPayload, request.provider, env)
+  const selectedProvider = canonicalProviderId(request.provider || defaultProviderForRequest(request))
+  const externalExecution = await runExternalProviderIfConfigured(selectedProviderPayload, selectedProvider, env)
 
   return {
     providerJob,
     providerPayloads,
-    selectedProvider: request.provider || 'mock-provider',
+    selectedProvider,
     selectedProviderPayload,
     externalExecution,
   }
@@ -18,9 +19,14 @@ export async function prepareProviderExecution(request, env = process.env) {
 
 export function buildProviderJob(request) {
   return {
-    provider: request.provider || 'mock-provider',
+    provider: canonicalProviderId(request.provider || defaultProviderForRequest(request)),
     requestId: request.id,
     mode: request.generationMode || request.kind || 'generation',
+    model: request.model,
+    providerOptions:
+      request.providerOptions && typeof request.providerOptions === 'object' && !Array.isArray(request.providerOptions)
+        ? request.providerOptions
+        : undefined,
     outputMediaType: request.output?.mediaType === 'video' ? 'video' : 'image',
     prompt: request.instructions?.prompt || '',
     inputs: Array.isArray(request.references)
@@ -29,6 +35,7 @@ export function buildProviderJob(request) {
           role: reference.role || 'reference',
           localPath: reference.localPath,
           absolutePath: reference.absolutePath,
+          bounds: reference.bounds,
         }))
       : [],
     outputLocalPath: request.output?.localPath,
@@ -40,8 +47,10 @@ export function buildProviderPayloads(job) {
   return {
     atlas: {
       task: 'media_generation',
+      model: job.model,
       mode: job.mode,
       prompt: job.prompt,
+      providerOptions: job.providerOptions,
       output: {
         type: job.outputMediaType,
         localPath: job.outputLocalPath,
@@ -52,6 +61,7 @@ export function buildProviderPayloads(job) {
       model: 'seedance-reference-video',
       mode: job.mode === 'text_to_video' ? 'text_to_video' : 'reference_to_video',
       prompt: job.prompt,
+      providerOptions: job.providerOptions,
       references: job.inputs.map(toProviderReference),
       output: {
         mediaType: job.outputMediaType,
@@ -62,6 +72,7 @@ export function buildProviderPayloads(job) {
       model: 'kling-reference-video',
       task: job.inputs.length > 0 ? 'edit' : 'generate',
       prompt: job.prompt,
+      providerOptions: job.providerOptions,
       referenceAssets: job.inputs.map(toProviderReference),
       output: {
         mediaType: job.outputMediaType,
@@ -72,13 +83,22 @@ export function buildProviderPayloads(job) {
 }
 
 export async function runExternalProviderIfConfigured(payload, provider, env = process.env) {
-  if (provider === 'atlas') return await runAtlasProvider(payload, { env })
+  if (provider === 'codex-native') {
+    return {
+      status: 'requires_codex_native',
+      provider: 'codex-native',
+      reason: 'Codex native image generation is handled by the Codex image skill, not the local provider executor.',
+      endpointConfigured: false,
+    }
+  }
+
+  if (canonicalProviderId(provider) === 'Atlas Cloud') return await runAtlasProvider(payload, { env })
 
   const endpoint = endpointForProvider(provider, env)
   if (!endpoint) {
     return {
       status: 'skipped',
-      provider: provider || 'mock-provider',
+      provider: provider || 'unconfigured-provider',
       reason: 'No provider endpoint configured.',
       endpointConfigured: false,
     }
@@ -115,24 +135,34 @@ export async function runExternalProviderIfConfigured(payload, provider, env = p
 }
 
 export function normalizeProviderKey(provider) {
-  if (provider === 'atlas') return 'atlas'
+  if (canonicalProviderId(provider) === 'Atlas Cloud') return 'atlas'
+  if (provider === 'codex-native') return 'atlas'
   if (provider === 'seedance') return 'seedance'
   if (provider === 'kling') return 'kling'
   return 'atlas'
 }
 
+function defaultProviderForRequest(request) {
+  return request.output?.mediaType === 'video' ? 'Atlas Cloud' : 'codex-native'
+}
+
 function endpointForProvider(provider, env) {
-  if (provider === 'atlas') return env.ATLAS_PROVIDER_ENDPOINT || env.REAL_PROVIDER_ENDPOINT
+  if (canonicalProviderId(provider) === 'Atlas Cloud') return env.ATLAS_PROVIDER_ENDPOINT || env.REAL_PROVIDER_ENDPOINT
   if (provider === 'seedance') return env.SEEDANCE_PROVIDER_ENDPOINT || env.REAL_PROVIDER_ENDPOINT
   if (provider === 'kling') return env.KLING_PROVIDER_ENDPOINT || env.REAL_PROVIDER_ENDPOINT
   return ''
 }
 
 function apiKeyForProvider(provider, env) {
-  if (provider === 'atlas') return env.ATLAS_PROVIDER_API_KEY || env.REAL_PROVIDER_API_KEY
+  if (canonicalProviderId(provider) === 'Atlas Cloud') return env.ATLAS_PROVIDER_API_KEY || env.REAL_PROVIDER_API_KEY
   if (provider === 'seedance') return env.SEEDANCE_PROVIDER_API_KEY || env.REAL_PROVIDER_API_KEY
   if (provider === 'kling') return env.KLING_PROVIDER_API_KEY || env.REAL_PROVIDER_API_KEY
   return ''
+}
+
+function canonicalProviderId(provider) {
+  if (provider === 'atlas' || provider === 'AtlasCloud' || provider === 'atlas-cloud') return 'Atlas Cloud'
+  return provider
 }
 
 function toProviderReference(input) {
@@ -140,6 +170,7 @@ function toProviderReference(input) {
     type: input.mediaType,
     role: input.role,
     uri: input.absolutePath || input.localPath,
+    bounds: input.bounds,
   }
 }
 

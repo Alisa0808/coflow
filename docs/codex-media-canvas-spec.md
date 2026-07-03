@@ -1,4 +1,4 @@
-# Codex Media Canvas — 实现规格（v2，防偏离版）
+# CoFlow — 实现规格（v2，防偏离版）
 
 > 本文取代散文式规划，作为**实现 agent 的唯一执行依据**。
 > 背景：上一版实现（见 `canvas-studio/`）严重偏离核心，本文用"硬约束 + 单一闭环 + 反面清单"重写。
@@ -132,7 +132,7 @@ canvas.extract_video_frame    # 抽帧为 MediaFrameShape（v1 视频用）
 
 ### 本地存储（引用，不存大二进制进画布）
 ```
-.codex-media-canvas/
+.coflow/
   canvases/        # tldraw 文档快照（只存 shape + 引用，不存大文件）
   assets/{images,videos,frames,thumbnails}/
   metadata/
@@ -155,7 +155,7 @@ output 本地路径 · media 类型 · parent asset/version id · prompt · prov
 **Codex 驱动混合式**，画布不做模型市场。三条路径：
 - **A. Codex Native** — 零配置 demo，`provider: codex-native`
 - **B. Atlas Cloud（推荐）** — 装 Atlas Skill/MCP/CLI，配 `ATLASCLOUD_API_KEY`，覆盖图/视频/多模型路由
-- **C. Custom Provider** — OpenAI/Fal/Replicate/ComfyUI/Runway/Higgsfield 等，只需按 result contract 回填
+- **C. Custom Provider** — OpenAI/Replicate/ComfyUI/Runway/Higgsfield/内部模型等，只需按 result contract 回填
 
 首次安装引导三选一。画布只显示轻量 provider 状态（§4），复杂选择走对话。
 
@@ -191,7 +191,7 @@ output 本地路径 · media 类型 · parent asset/version id · prompt · prov
 ## 9. 技术架构
 
 ```
-codex-media-canvas/
+coflow/
   canvas-web/      # React + TS + tldraw（自定义 MediaShape、标注、selection、自动布局）
   local-server/    # 本地 HTTP：asset 文件、metadata、job 状态、画布快照
   mcp-server/      # 暴露 canvas.* 工具给 Codex

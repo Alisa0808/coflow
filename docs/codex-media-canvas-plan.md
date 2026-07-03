@@ -1,12 +1,12 @@
-# Codex Media Canvas Plan
+# CoFlow Plan
 
 Last updated: 2026-06-25
 
 ## 1. Project Definition
 
-**Project name:** Codex Media Canvas
+**Project name:** CoFlow
 
-**Repo name:** `codex-media-canvas`
+**Repo name:** `coflow`
 
 **One-line positioning:**
 
@@ -20,7 +20,7 @@ Last updated: 2026-06-25
 
 > Point. Prompt. Generate back.
 
-Codex Media Canvas is not intended to be a full Lovart, Tapnow, Canva, or Figma replacement. Its first product shape is a Codex ecosystem plugin: the canvas manages visual context and media assets; Codex handles conversation, skill orchestration, provider selection, generation, and local file management.
+CoFlow is not intended to be a full Lovart, Tapnow, Canva, or Figma replacement. Its first product shape is a Codex ecosystem plugin: the canvas manages visual context and media assets; Codex handles conversation, skill orchestration, provider selection, generation, and local file management.
 
 ## 2. Target Users and Use Cases
 
@@ -104,7 +104,7 @@ Direct provider API calls from the canvas may be explored later as a fast/headle
 
 Provider integration uses a **Codex-driven hybrid model**.
 
-Codex Media Canvas should not become a model marketplace UI. The canvas records preferences, presets, local assets, and metadata; Codex performs the actual provider orchestration.
+CoFlow should not become a model marketplace UI. The canvas records preferences, presets, local assets, and metadata; Codex performs the actual provider orchestration.
 
 ### Provider paths
 
@@ -158,7 +158,7 @@ Metadata should record:
 
 #### 4.3 Custom provider via Skill/MCP/CLI
 
-Advanced users can connect providers such as OpenAI, Fal, Replicate, ComfyUI, Runway, Higgsfield, or internal tools.
+Advanced users can connect providers such as OpenAI, Replicate, ComfyUI, Runway, Higgsfield, or internal tools.
 
 The only requirement is that the custom workflow returns:
 
@@ -174,7 +174,41 @@ The only requirement is that the custom workflow returns:
 
 ### First-run provider onboarding
 
-The first-run guide should offer three choices:
+The provider onboarding should appear automatically after plugin installation / first enablement. It should not be hidden behind a canvas button.
+
+Implementation timing:
+
+- This belongs in **Phase 2.1**, after the Phase 1 generation/writeback loop is stable and before public plugin release.
+- The current `coflow-provider-setup` skill is the single user-facing entry for viewing/changing provider and model defaults, skipping setup, rerunning setup, and diagnosing runtime failures. Full first-run onboarding should call this same settings contract instead of creating a separate provider skill.
+- The current local settings foundation is `.coflow/metadata/provider-settings.json`, exposed through `canvas.get_provider_settings`, `canvas.get_provider_onboarding`, `canvas.set_provider_settings`, `GET /api/provider/settings`, `GET /api/provider/onboarding`, and `PUT /api/provider/settings`.
+- Full automatic onboarding depends on Codex plugin lifecycle support for first-enable / first-run detection. Until that hook is available, the open skill reads `canvas.get_provider_onboarding` and shows the first-run prompt when status is `not_started`.
+
+The first-run guide should collect:
+
+1. Default image provider
+   - Atlas Cloud recommended;
+   - alternatives include Codex / GPT Image, Google / Nano Banana, OpenAI-compatible, or Custom.
+
+2. Default video provider
+   - Atlas Cloud recommended;
+   - alternatives include Google / Veo, Seedance, Kling, OpenAI-compatible, or Custom.
+
+3. Default image model and default video model
+   - selected from the chosen provider capabilities when possible;
+   - editable later from Codex settings / commands.
+
+4. Credentials and endpoints
+   - API keys, base URLs, MCP servers, or CLI commands;
+   - secrets must stay out of canvas JSON, frame input, generation request artifacts, and git.
+
+Runtime provider priority:
+
+1. explicit provider / model named by the user for this turn;
+2. active Skill provider policy when required and safe;
+3. onboarding default provider / model;
+4. safe fallback, or ask the user to configure a provider.
+
+The first-run guide may still present this as three user-facing paths:
 
 1. **Use Codex native generation**
    - fastest path;
@@ -412,6 +446,7 @@ Scope:
   - Codex native;
   - Atlas Cloud;
   - custom provider;
+  - local provider defaults saved outside canvas JSON;
 - v1 candidate scene Skills:
   - Product Marketing Set;
   - Social Repurpose;
@@ -440,27 +475,37 @@ Acceptance criteria:
 
 Goal:
 
-Make Atlas the best-supported advanced provider while preserving open-source neutrality.
+Make Atlas the best-supported advanced provider while preserving open-source neutrality, and package the workflow as installable Codex skills instead of canvas-only buttons.
 
 Scope:
 
 - Atlas setup guide;
+- provider/model setup defaults plus redacted runtime diagnostics;
 - Atlas Skill/MCP/CLI examples;
 - provider preset schema;
 - task metadata normalization;
 - provider fallback;
 - retry failed tasks;
 - rerun a task with a different provider/model;
-- custom provider result contract.
+- custom provider result contract;
+- scene workflow skills:
+  - Product Marketing Set;
+  - Social Repurpose;
+  - Video Ad Keyframes;
+  - Style Exploration;
+- first 3D workflow boundary with thumbnail/metadata writeback until native 3D preview exists.
 
 Acceptance criteria:
 
 - Atlas image generation returns to canvas;
 - Atlas video or frame-guided demo returns to canvas;
+- `canvas.get_provider_status` reports provider readiness without exposing secrets;
+- image/video/scene skills are visible in the plugin and route through Codex;
 - Codex native and Atlas both work;
 - custom provider can insert results through the same contract;
 - failed provider tasks show traceable status and error details;
-- rerun does not overwrite old versions.
+- rerun does not overwrite old versions;
+- 3D docs and skill do not overclaim full native 3D editing.
 
 ### v3 — Asset Graph and Workflow Expansion
 
@@ -503,7 +548,7 @@ The canvas should persist references, not large binaries.
 Recommended storage model:
 
 ```text
-.codex-media-canvas/
+.coflow/
   canvases/
   assets/
     images/
@@ -581,7 +626,7 @@ Recommended flow:
 - selected video frame appears in selection context;
 - multi-output generation creates a grid;
 - asset details panel shows provider/model/prompt/path;
-- missing provider setup shows a clear “configure in Codex” message;
+- missing provider defaults show a clear “configure provider/model in Codex” message;
 - Codex native generation path can complete without Atlas;
 - Atlas path can be configured without making the project Atlas-only.
 
@@ -608,7 +653,7 @@ Recommended flow:
 
 ## 11. Working Assumptions
 
-- The project name is **Codex Media Canvas**.
+- The project name is **CoFlow**.
 - v0/v1 use tldraw for speed, with an adapter boundary for future replacement.
 - Provider strategy is Codex-driven hybrid.
 - Atlas is the recommended advanced provider, not the only supported provider.

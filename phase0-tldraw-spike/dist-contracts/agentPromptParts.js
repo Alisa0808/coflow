@@ -1,4 +1,4 @@
-export function buildBoundedFrameContextPromptPart(context, source = 'codex-agent-bridge') {
+export function buildBoundedFrameContextPromptPart(context, source = 'codex-skill') {
   return {
     type: 'bounded_frame_context',
     source,
@@ -17,4 +17,3 @@ export function buildBoundedFrameContextPromptPart(context, source = 'codex-agen
     },
   }
 }
-

@@ -1,11 +1,13 @@
 import { createProviderReadyGenerationRequest } from './generationContract.js'
 
 export function createGenerateMediaAction(args) {
-  const preferredProvider = args.provider ?? args.providerPolicy?.preferredProvider ?? 'atlas'
+  const preferredProvider = canonicalProviderId(
+    args.provider ?? args.providerPolicy?.preferredProvider ?? (args.outputMediaType === 'video' ? 'Atlas Cloud' : 'codex-native'),
+  )
   return {
     type: 'generate-media',
     id: `action:generate-media:${args.createdAt ?? Date.now()}`,
-    skillName: 'codex-media-generation',
+    skillName: 'coflow-generation',
     source: args.source,
     prompt: args.prompt,
     providerPolicy: {
@@ -25,6 +27,11 @@ export function createGenerateMediaAction(args) {
       absolutePath: args.outputAbsolutePath,
     },
   }
+}
+
+function canonicalProviderId(provider) {
+  if (provider === 'atlas') return 'Atlas Cloud'
+  return provider
 }
 
 export function createGenerationRequestFromGenerateMediaAction(action) {

@@ -1,9 +1,9 @@
 {
-  "name": "codex-media-canvas",
-  "version": "0.2.0",
+  "name": "coflow",
+  "version": "0.2.0+codex.20260702170624",
   "description": "A Codex-driven media canvas for image and video generation/editing from whiteboard selection, frames, and annotations.",
   "author": {
-    "name": "Codex Media Canvas contributors"
+    "name": "CoFlow contributors"
   },
   "license": "MIT",
   "keywords": [
@@ -18,10 +18,10 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Codex Media Canvas",
+    "displayName": "CoFlow",
     "shortDescription": "Open a canvas, generate or edit images/videos from frames and annotations, and write results back with lineage.",
-    "longDescription": "Codex Media Canvas keeps the whiteboard as visual context and writeback surface. Codex skills decide image/video generation modes, call real providers, and insert results back onto the canvas.",
-    "developerName": "Codex Media Canvas contributors",
+    "longDescription": "CoFlow keeps the whiteboard as visual context and writeback surface. Codex skills decide image/video/3D workflow modes, call real providers, and insert results back onto the canvas with local assets, lineage, and metadata.",
+    "developerName": "CoFlow contributors",
     "category": "Productivity",
     "capabilities": [
       "Interactive",
@@ -30,10 +30,12 @@
       "Skills"
     ],
     "defaultPrompt": [
-      "Open Codex Media Canvas.",
+      "Open CoFlow.",
+      "View or change CoFlow provider/model defaults.",
       "Generate an image on the canvas.",
       "Edit the selected image according to the frame annotations.",
-      "Generate a video from the selected frame or prompt."
+      "Generate a video from the selected frame or prompt.",
+      "Prepare a 3D generation workflow from the selected references."
     ]
   },
   "mcpServers": "./.mcp.json"

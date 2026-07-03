@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AssetRecordType,
   DefaultColorStyle,
@@ -7,10 +7,12 @@ import {
   createShapeId,
   startEditingShapeWithRichText,
   toRichText,
+  useEditor,
   type Editor,
   type TLAsset,
   type TLAssetId,
   type TLAssetStore,
+  type TLComponents,
   type TLArrowShape,
   type TLShape,
   type TLShapeId,
@@ -33,17 +35,16 @@ import {
 import { MEDIA_IMAGE_SHAPE, MediaImageShapeUtil } from './mediaShape'
 import {
   fetchPendingCommands,
-  loadActiveSkillSession,
+  fetchPendingSelectionCaptureRequests,
   loadCanvasDocument,
   materializeAsset,
   publishCodexFrameRequest,
   publishFrameContext,
   publishSelectionSnapshot,
   recordOperation,
-  runActiveSkillFrame,
+  respondToSelectionCaptureRequest,
   saveCanvasDocument,
   saveFrameScreenshot,
-  type ActiveSkillSession,
   type CanvasCommand,
   type CodexFrameRequest,
   type FrameScreenshot,
@@ -62,6 +63,7 @@ const FLOATING_ARROW_MIN_BEND = 12
 const FLOATING_ARROW_MAX_BEND = 32
 const FLOATING_ARROW_DEFAULT_COLOR = 'red'
 const FLOATING_ARROW_LABEL_POSITION = 0
+const SELECTION_HEARTBEAT_MS = 1800
 
 type FrameActionState = {
   frameId: string
@@ -79,17 +81,39 @@ type UploadProgressState = {
 } | null
 
 type SelectedMediaInfo = {
+  shapeId: TLShapeId
   title: string
+  mediaType: 'image' | 'video'
+  triggerLeft: number
+  triggerTop: number
+  panelLeft: number
+  panelTop: number
+  showTrigger: boolean
+  previewSrc?: string
   prompt?: string
   provider?: string
   model?: string
-  generationMode?: string
-  status?: string
   skillName?: string
-  localPath?: string
-  requestId?: string
-  executionId?: string
+  absolutePath?: string
+  size?: string
+  resolution?: string
+  quality?: string
+  references?: MediaReferenceInfo[]
 } | null
+
+type MediaReferenceInfo = {
+  mediaType: 'image' | 'video'
+  src: string
+  shapeId?: string
+  assetId?: string
+  title?: string
+  localPath?: string
+  absolutePath?: string
+}
+
+function getFloatingOverlaySnapshot(frameAction: FrameActionState, selectedMediaInfo: SelectedMediaInfo) {
+  return JSON.stringify({ frameAction, selectedMediaInfo })
+}
 
 type FrameScreenshotResult = {
   clipboardCopied: boolean
@@ -140,6 +164,7 @@ class FloatingArrowPointing extends StateNode {
     this.editor.createShape({
       id: arrowId,
       type: 'arrow',
+      parentId: this.editor.getCurrentPageId(),
       x: origin.x,
       y: origin.y,
       meta: {
@@ -295,6 +320,8 @@ function getFloatingArrowBend(dx: number, dy: number, scale: number) {
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
   const frameActionRafRef = useRef<number | null>(null)
+  const floatingOverlayRafRef = useRef<number | null>(null)
+  const lastFloatingOverlaySnapshotRef = useRef('')
   const statusTimeoutRef = useRef<number | null>(null)
   const selectionPublishTimeoutRef = useRef<number | null>(null)
   const canvasSaveTimeoutRef = useRef<number | null>(null)
@@ -303,10 +330,9 @@ export default function App() {
   const lastPublishedSelectionRef = useRef('')
   const [status, setStatus] = useState('')
   const [frameAction, setFrameAction] = useState<FrameActionState>(null)
-  const [activeSkillSession, setActiveSkillSession] = useState<ActiveSkillSession>(null)
   const [selectedMediaInfo, setSelectedMediaInfo] = useState<SelectedMediaInfo>(null)
+  const [mediaInfoOpen, setMediaInfoOpen] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>(null)
-  const [generatingFrameIds, setGeneratingFrameIds] = useState<Set<string>>(() => new Set())
 
   function showStatus(message: string, durationMs = 3200) {
     const appWindow = editorRef.current?.getContainer().ownerDocument.defaultView ?? window
@@ -321,18 +347,46 @@ export default function App() {
   }
 
   const assetStore = useMemo(() => createLocalAssetStore(setUploadProgress, showStatus), [])
+  const tldrawComponents = useMemo<TLComponents>(() => {
+    function CodexInFrontOfTheCanvas() {
+      return (
+        <CanvasFloatingOverlays
+          selectedMediaInfo={selectedMediaInfo}
+          mediaInfoOpen={mediaInfoOpen}
+          frameAction={frameAction}
+          onMediaInfoToggle={() => setMediaInfoOpen((value) => !value)}
+          onMediaInfoClose={() => setMediaInfoOpen(false)}
+          onSend={sendFrameToCodex}
+        />
+      )
+    }
+
+    return {
+      InFrontOfTheCanvas: CodexInFrontOfTheCanvas,
+    }
+  }, [frameAction, mediaInfoOpen, selectedMediaInfo])
+
+  function syncFloatingOverlayState(editor: Editor) {
+    const nextFrameAction = getSelectedFrameAction(editor)
+    const nextSelectedMediaInfo = getSelectedMediaInfo(editor)
+    const nextSnapshot = getFloatingOverlaySnapshot(nextFrameAction, nextSelectedMediaInfo)
+    if (nextSnapshot === lastFloatingOverlaySnapshotRef.current) return
+
+    lastFloatingOverlaySnapshotRef.current = nextSnapshot
+    setFrameAction(nextFrameAction)
+    setSelectedMediaInfo(nextSelectedMediaInfo)
+  }
+
+  useEffect(() => {
+    setMediaInfoOpen(false)
+  }, [selectedMediaInfo?.shapeId])
+
+  useEffect(() => {
+    setMediaInfoOpen(false)
+  }, [selectedMediaInfo?.shapeId])
 
   useEffect(() => {
     let stopped = false
-
-    async function pollActiveSkillSession() {
-      if (stopped) return
-      try {
-        setActiveSkillSession(await loadActiveSkillSession())
-      } catch {
-        // The local backend may still be starting; keep the canvas usable.
-      }
-    }
 
     async function pollWritebackCommands() {
       if (stopped) return
@@ -355,22 +409,48 @@ export default function App() {
       }
     }
 
+    async function pollFreshSelectionCaptureRequests() {
+      if (stopped) return
+      const editor = editorRef.current
+      if (!editor) return
+
+      try {
+        const requests = await fetchPendingSelectionCaptureRequests()
+        for (const request of requests) {
+          const selection = await buildSelectionSnapshot(editor)
+          await respondToSelectionCaptureRequest({ requestId: request.id, selection })
+          lastPublishedSelectionRef.current = getSelectionPublicationKey(selection)
+        }
+      } catch (error) {
+        await recordOperation({
+          type: 'selection.fresh_capture_failed',
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
     const interval = window.setInterval(() => {
       void pollWritebackCommands()
     }, 1000)
-    const activeSkillInterval = window.setInterval(() => {
-      void pollActiveSkillSession()
-    }, 1600)
+    const freshSelectionInterval = window.setInterval(() => {
+      void pollFreshSelectionCaptureRequests()
+    }, 500)
+    const selectionHeartbeatInterval = window.setInterval(() => {
+      const editor = editorRef.current
+      if (editor) void publishCurrentSelection(editor)
+    }, SELECTION_HEARTBEAT_MS)
     void pollWritebackCommands()
-    void pollActiveSkillSession()
+    void pollFreshSelectionCaptureRequests()
 
     return () => {
       stopped = true
       window.clearInterval(interval)
-      window.clearInterval(activeSkillInterval)
+      window.clearInterval(freshSelectionInterval)
+      window.clearInterval(selectionHeartbeatInterval)
       if (statusTimeoutRef.current !== null) window.clearTimeout(statusTimeoutRef.current)
       if (selectionPublishTimeoutRef.current !== null) window.clearTimeout(selectionPublishTimeoutRef.current)
       if (canvasSaveTimeoutRef.current !== null) window.clearTimeout(canvasSaveTimeoutRef.current)
+      if (floatingOverlayRafRef.current !== null) window.cancelAnimationFrame(floatingOverlayRafRef.current)
     }
   }, [])
 
@@ -392,15 +472,20 @@ export default function App() {
     })
     editor.disposables.add(disposeDefaultArrow)
     void restoreCanvasDocument(editor)
-    setFrameAction(getSelectedFrameAction(editor))
-    setSelectedMediaInfo(getSelectedMediaInfo(editor))
+    syncFloatingOverlayState(editor)
+    const overlayWindow = editor.getContainer().ownerDocument.defaultView ?? window
+    if (floatingOverlayRafRef.current !== null) overlayWindow.cancelAnimationFrame(floatingOverlayRafRef.current)
+    const syncOverlaysOnFrame = () => {
+      syncFloatingOverlayState(editor)
+      floatingOverlayRafRef.current = overlayWindow.requestAnimationFrame(syncOverlaysOnFrame)
+    }
+    floatingOverlayRafRef.current = overlayWindow.requestAnimationFrame(syncOverlaysOnFrame)
     const unsubscribe = editor.store.listen(({ changes }) => {
       const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
       if (frameActionRafRef.current !== null) appWindow.cancelAnimationFrame(frameActionRafRef.current)
       frameActionRafRef.current = appWindow.requestAnimationFrame(() => {
         frameActionRafRef.current = null
-        setFrameAction(getSelectedFrameAction(editor))
-        setSelectedMediaInfo(getSelectedMediaInfo(editor))
+        syncFloatingOverlayState(editor)
       })
       scheduleSelectionPublish(editor)
       if (!isRestoringCanvasRef.current) {
@@ -432,6 +517,7 @@ export default function App() {
       }
       if (document.camera) editor.setCamera(document.camera, { immediate: true })
       normalizeLegacyDefaultArrowBends(editor)
+      syncAnnotationArrowStyles(editor)
       await waitForRestoreSideEffects(editor)
       editor.selectNone()
       setFrameAction(getSelectedFrameAction(editor))
@@ -503,11 +589,7 @@ export default function App() {
   async function publishCurrentSelection(editor: Editor) {
     try {
       const selection = await buildSelectionSnapshot(editor)
-      const serialized = JSON.stringify({
-        selectedIds: selection.selectedIds,
-        selectedItems: selection.selectedItems,
-        activeFrameId: selection.activeFrame?.frameId,
-      })
+      const serialized = getSelectionPublicationKey(selection)
       if (serialized === lastPublishedSelectionRef.current) return
       lastPublishedSelectionRef.current = serialized
       await publishSelectionSnapshot(selection)
@@ -519,10 +601,7 @@ export default function App() {
     }
   }
 
-  async function publishFrameForCodex(
-    frameId: string,
-    status: 'awaiting_user_instruction' | 'ready_to_execute',
-  ): Promise<{ request: CodexFrameRequest; context: FrameContext; screenshotResult: FrameScreenshotResult } | null> {
+  async function publishFrameForCodex(frameId: string): Promise<{ request: CodexFrameRequest; context: FrameContext; screenshotResult: FrameScreenshotResult } | null> {
     const editor = editorRef.current
     if (!editor) return null
     const shapes = toCanvasShapeRecords(editor, editor.getCurrentPageShapesSorted())
@@ -545,7 +624,7 @@ export default function App() {
     const request = await publishCodexFrameRequest({
       frameId: context.frameId,
       promptPart,
-      status,
+      status: 'awaiting_user_instruction',
       summary: {
         frameName: context.frameName,
         mediaCount: context.media.length,
@@ -555,26 +634,22 @@ export default function App() {
       },
       frameScreenshot: frameScreenshot.screenshot,
       defaultInstruction:
-        status === 'ready_to_execute'
-          ? 'This frame belongs to an active Codex media Skill session. Use the structured Frame Input as source of truth, execute the active Skill, then call canvas.insert_media or canvas.create_version to place the result back on the board.'
-          : 'Treat this as a pending Codex canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back on the board.',
+        'Treat this as a pending CoFlow canvas request. Summarize the selected frame context in the Codex conversation first, wait for the user to confirm or add instructions, then choose the right Skill/provider/model and call canvas.insert_media or canvas.create_version to place the result back on the board.',
       recommendedUserPrompt:
-        status === 'ready_to_execute'
-          ? 'Generate a version from the media and annotations inside this frame using the active Skill.'
-          : 'I have sent this frame to Codex. Please tell me what you want to create or edit from this frame, or say “generate a version from these annotations”.',
+        'I have sent this frame to Codex. Please tell me what you want to create or edit from this frame, or say “generate a version from these annotations”.',
     })
     await recordOperation({
-      type: status === 'ready_to_execute' ? 'codex.frame_context_ready_to_execute' : 'codex.frame_context_sent',
+      type: 'codex.frame_context_sent',
       frameId: context.frameId,
       promptPart,
-      skillName: activeSkillSession?.skillName ?? 'codex-media-generation',
+      skillName: 'coflow-context',
       promptSource: 'canvas-frame-action',
     })
     return { request, context, screenshotResult: frameScreenshot }
   }
 
   async function sendFrameToCodex(frameId: string) {
-    const published = await publishFrameForCodex(frameId, 'awaiting_user_instruction')
+    const published = await publishFrameForCodex(frameId)
     if (!published) return
 
     showStatus(
@@ -583,50 +658,6 @@ export default function App() {
         : 'Sent frame to Codex. Screenshot copy was blocked, but Codex can read the Frame Input.',
       6200,
     )
-  }
-
-  async function generateFrameVersion(frameId: string) {
-    if (!activeSkillSession?.autoRun) {
-      void sendFrameToCodex(frameId)
-      return
-    }
-
-    if (generatingFrameIds.has(frameId)) return
-    setGeneratingFrameIds((current) => new Set(current).add(frameId))
-    showStatus(`Generating with ${activeSkillSession.displayName}. Keep this canvas open for writeback.`, 0)
-
-    const published = await publishFrameForCodex(frameId, 'ready_to_execute')
-    if (!published) {
-      setGeneratingFrameIds((current) => {
-        const next = new Set(current)
-        next.delete(frameId)
-        return next
-      })
-      showStatus('', 1)
-      return
-    }
-
-    try {
-      await runActiveSkillFrame({
-        frameId: published.context.frameId,
-        frameRequestId: published.request.id,
-      })
-      showStatus('Generated version is ready. Placing it on canvas…', 3200)
-    } catch (error) {
-      await recordOperation({
-        type: 'active_skill.run_failed',
-        frameId: published.context.frameId,
-        skillName: activeSkillSession.skillName,
-        error: error instanceof Error ? error.message : String(error),
-      })
-      showStatus(error instanceof Error ? error.message : 'Active Skill run failed.', 6200)
-    } finally {
-      setGeneratingFrameIds((current) => {
-        const next = new Set(current)
-        next.delete(frameId)
-        return next
-      })
-    }
   }
 
   async function copyAndSaveFrameScreenshot(
@@ -687,16 +718,19 @@ export default function App() {
     if (!editor) return
 
     const shapes = toCanvasShapeRecords(editor, editor.getCurrentPageShapesSorted())
+    const sourceShape = command.sourceShapeId ? editor.getShape(command.sourceShapeId as TLShapeId) : undefined
     const frame = command.frameId ? shapes.find((shape) => shape.id === command.frameId && shape.type === 'frame') : findContextFrame(editor, shapes)
-    if (!frame) {
-      showStatus('Codex writeback skipped: target frame not found.', 5200)
-      return
-    }
+    const context = !sourceShape && frame ? await extractMaterializedFrameContext(editor, shapes, frame.id) : undefined
+    const frameAnchor = context?.anchorMedia
+    const anchor = sourceShape
+      ? {
+          shapeId: sourceShape.id,
+          bounds: getShapePageBoundsRecord(editor, sourceShape),
+        }
+      : frameAnchor
 
-    const context = await extractMaterializedFrameContext(editor, shapes, frame.id)
-    const anchor = context.anchorMedia
     if (!anchor) {
-      showStatus('Codex writeback skipped: frame has no media anchor.', 5200)
+      showStatus('Codex writeback skipped: target source shape or frame media anchor not found.', 5200)
       return
     }
 
@@ -708,22 +742,25 @@ export default function App() {
 
     const childId = createShapeId()
     const arrowId = createShapeId()
-    const outputSize = { w: anchor.bounds.w, h: anchor.bounds.h }
-    const placement = createVersionPlacement(anchor.bounds, outputSize, shapes.map(getShapeBounds))
+    const outputSize = getGeneratedMediaOutputSize(command, anchor.bounds)
+    const placement = createVersionPlacement(anchor.bounds, outputSize, getVersionPlacementOccupiedBounds(shapes, anchor.shapeId, command.frameId))
     const parentShapeId = anchor.shapeId as TLShapeId
     const versionId = `version:codex-${Date.now()}`
-    const arrowStart = {
-      x: anchor.bounds.x + anchor.bounds.w + 16,
-      y: anchor.bounds.y + anchor.bounds.h / 2,
-    }
-    const arrowEnd = {
-      x: placement.childBounds.x - 16,
-      y: placement.childBounds.y + placement.childBounds.h / 2,
+    const arrowStart = placement.lineageArrow.start
+    const arrowEnd = placement.lineageArrow.end
+    const writebackCompletedAt = new Date().toISOString()
+    const e2eDurationMs = getDurationMs(command.e2eStartedAt, writebackCompletedAt)
+    const commandWithWritebackTiming: CanvasCommand = {
+      ...command,
+      writebackCompletedAt,
+      e2eCompletedAt: writebackCompletedAt,
+      e2eDurationMs,
     }
 
     const generated = createNativeGeneratedMediaRecords({
-      command,
+      command: commandWithWritebackTiming,
       childId,
+      parentId: editor.getCurrentPageId(),
       bounds: placement.childBounds,
       src,
       versionId,
@@ -761,7 +798,7 @@ export default function App() {
           toId: parentShapeId,
           props: {
             terminal: 'start',
-            normalizedAnchor: { x: 1, y: 0.5 },
+            normalizedAnchor: placement.lineageArrow.startAnchor,
             isExact: false,
             isPrecise: true,
           },
@@ -772,7 +809,7 @@ export default function App() {
           toId: childId,
           props: {
             terminal: 'end',
-            normalizedAnchor: { x: 0, y: 0.5 },
+            normalizedAnchor: placement.lineageArrow.endAnchor,
             isExact: false,
             isPrecise: true,
           },
@@ -781,14 +818,37 @@ export default function App() {
       editor.select(childId)
     })
 
+    const createdChild = editor.getShape(childId)
+    const createdArrow = editor.getShape(arrowId)
+    const createdAsset = editor.getAsset(generated.asset.id)
+    if (!createdChild || !createdArrow || !createdAsset) {
+      await recordOperation({
+        type: 'codex.version_place_failed',
+        reason: 'native_records_missing_after_create',
+        parentShapeId,
+        childShapeId: childId,
+        arrowShapeId: arrowId,
+        assetId: generated.asset.id,
+        hasChild: Boolean(createdChild),
+        hasArrow: Boolean(createdArrow),
+        hasAsset: Boolean(createdAsset),
+        command: commandWithWritebackTiming,
+      })
+      showStatus('Codex writeback failed: generated native media records were not created.', 6400)
+      return
+    }
+
     await recordOperation({
       type: 'codex.version_placed',
-      frameId: context.frameId,
+      frameId: context?.frameId ?? command.frameId,
       parentShapeId,
       childShapeId: childId,
       arrowShapeId: arrowId,
-      command,
+      command: commandWithWritebackTiming,
     })
+    await waitForRestoreSideEffects(editor, 2)
+    await persistCanvasDocument(editor)
+    await publishCurrentSelection(editor)
     setSelectedMediaInfo(getSelectedMediaInfo(editor))
     showStatus('Placed Codex generated version on canvas.', 3200)
   }
@@ -887,6 +947,7 @@ export default function App() {
     <div className="app">
       <div className="canvas">
         <Tldraw
+          components={tldrawComponents}
           shapeUtils={shapeUtils}
           tools={[FloatingArrowTool]}
           onMount={onMount}
@@ -900,142 +961,358 @@ export default function App() {
           {status}
         </div>
       ) : null}
-      {activeSkillSession ? <ActiveSkillPill session={activeSkillSession} /> : null}
-      {selectedMediaInfo ? <MediaInfoPanel info={selectedMediaInfo} /> : null}
       {uploadProgress ? <UploadProgress progress={uploadProgress} /> : null}
+    </div>
+  )
+}
+
+function CanvasFloatingOverlays({
+  selectedMediaInfo,
+  mediaInfoOpen,
+  frameAction,
+  onMediaInfoToggle,
+  onMediaInfoClose,
+  onSend,
+}: {
+  selectedMediaInfo: SelectedMediaInfo
+  mediaInfoOpen: boolean
+  frameAction: FrameActionState
+  onMediaInfoToggle: () => void
+  onMediaInfoClose: () => void
+  onSend: (frameId: string) => void
+}) {
+  const editor = useEditor()
+
+  return (
+    <>
+      {selectedMediaInfo?.showTrigger ? (
+        <MediaInfoOverlay
+          editor={editor}
+          info={selectedMediaInfo}
+          isOpen={mediaInfoOpen}
+          onToggle={onMediaInfoToggle}
+          onClose={onMediaInfoClose}
+        />
+      ) : null}
       {frameAction ? (
         <FrameCodexAction
           action={frameAction}
-          activeSkillSession={activeSkillSession}
-          isGenerating={generatingFrameIds.has(frameAction.frameId)}
-          onGenerate={generateFrameVersion}
-          onSend={sendFrameToCodex}
+          onSend={onSend}
         />
+      ) : null}
+    </>
+  )
+}
+
+function MediaInfoOverlay({
+  editor,
+  info,
+  isOpen,
+  onToggle,
+  onClose,
+}: {
+  editor: Editor | null
+  info: NonNullable<SelectedMediaInfo>
+  isOpen: boolean
+  onToggle: () => void
+  onClose: () => void
+}) {
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const panelRef = useRef<HTMLElement | null>(null)
+  const isGeneratedAsset = Boolean(info.prompt || info.model || info.provider || info.skillName)
+  const mediaLabel = info.mediaType === 'video' ? 'Video' : 'Image'
+  const panelTitle = isGeneratedAsset ? `${mediaLabel} Generator` : `${mediaLabel} asset`
+  const references = info.references ?? []
+  const referenceLabel = getMediaReferenceLabel(references)
+  const rows = [
+    ['Model', info.model],
+    ['Size', info.size],
+    ['Resolution', info.resolution],
+    ['Quality', info.quality],
+    ['Provider', formatProviderLabel(info.provider)],
+    ['Skill', info.skillName],
+    ['Absolute path', info.absolutePath],
+  ].filter((row): row is [string, string] => Boolean(row[1]))
+
+  useEffect(() => {
+    if (!editor) return
+
+    const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
+    let rafId: number | null = null
+    let lastPositionKey = ''
+
+    const syncPosition = () => {
+      const shape = editor.getShape(info.shapeId)
+      if (!shape) {
+        if (triggerRef.current) triggerRef.current.style.display = 'none'
+        if (panelRef.current) panelRef.current.style.display = 'none'
+        return
+      }
+
+      const position = getMediaInfoOverlayPosition(editor, shape)
+      const positionKey = `${position.triggerLeft}:${position.triggerTop}:${position.panelLeft}:${position.panelTop}:${position.showTrigger}`
+      if (positionKey !== lastPositionKey) {
+        lastPositionKey = positionKey
+        if (triggerRef.current) {
+          triggerRef.current.style.display = position.showTrigger ? 'grid' : 'none'
+          triggerRef.current.style.transform = `translate3d(${position.triggerLeft}px, ${position.triggerTop}px, 0)`
+        }
+        if (panelRef.current) {
+          panelRef.current.style.display = isOpen && position.showTrigger ? 'block' : 'none'
+          panelRef.current.style.transform = `translate3d(${position.panelLeft}px, ${position.panelTop}px, 0)`
+        }
+      }
+
+      rafId = appWindow.requestAnimationFrame(syncPosition)
+    }
+
+    syncPosition()
+
+    return () => {
+      if (rafId !== null) appWindow.cancelAnimationFrame(rafId)
+    }
+  }, [editor, info.shapeId, isOpen])
+
+  return (
+    <div className="media-info-overlay">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="media-info-trigger"
+        style={{ transform: `translate3d(${info.triggerLeft}px, ${info.triggerTop}px, 0)` }}
+        aria-expanded={isOpen}
+        aria-label="Show media details"
+        onPointerDownCapture={(event) => event.stopPropagation()}
+        onMouseDownCapture={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onToggle()
+        }}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.25" />
+          <path d="M8 7.15v4.15M8 4.7h.01" />
+        </svg>
+      </button>
+      {isOpen ? (
+        <aside
+          ref={panelRef}
+          className="media-info-panel"
+          style={{ transform: `translate3d(${info.panelLeft}px, ${info.panelTop}px, 0)` }}
+          aria-label="Selected media information"
+        >
+          <div className="media-info-panel__header">
+            <span className={`media-info-panel__thumb media-info-panel__thumb--${info.mediaType}`} aria-hidden="true">
+              {info.previewSrc ? (
+                info.mediaType === 'video' ? (
+                  <>
+                    <video src={info.previewSrc} muted playsInline />
+                    <span className="media-info-panel__play-badge" />
+                  </>
+                ) : (
+                  <img src={info.previewSrc} alt="" />
+                )
+              ) : null}
+            </span>
+            <div>
+              <div className="media-info-panel__title">{panelTitle}</div>
+              <div className="media-info-panel__subtitle">Asset details</div>
+            </div>
+            <button
+              type="button"
+              className="media-info-panel__close"
+              aria-label="Close media details"
+              onPointerDownCapture={(event) => event.stopPropagation()}
+              onMouseDownCapture={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                onClose()
+              }}
+            >
+              ×
+            </button>
+          </div>
+          <div className="media-info-panel__rows">
+            {info.prompt ? <MediaInfoRow label="Prompt" value={info.prompt} copyable /> : null}
+            {references.length > 0 ? (
+              <div className="media-info-panel__row">
+                <span>{referenceLabel}</span>
+                <div className="media-info-panel__reference-list">
+                  {references.map((reference, index) => (
+                    <MediaReferenceThumb
+                      key={`${reference.src}:${reference.shapeId ?? reference.assetId ?? index}`}
+                      reference={reference}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {rows.map(([label, value]) => (
+              <MediaInfoRow key={label} label={label} value={value} copyable={label === 'Absolute path'} />
+            ))}
+          </div>
+        </aside>
       ) : null}
     </div>
   )
 }
 
-function ActiveSkillPill({ session }: { session: NonNullable<ActiveSkillSession> }) {
+function MediaReferenceThumb({ reference }: { reference: MediaReferenceInfo }) {
   return (
-    <div className="active-skill-pill" aria-live="polite">
-      <span className="active-skill-pill__dot" aria-hidden="true" />
-      <span>{session.displayName}</span>
-      <em>{session.autoRun ? 'Generate mode' : 'Context mode'}</em>
+    <div className={`media-info-panel__reference media-info-panel__reference--${reference.mediaType}`} title={reference.title ?? reference.absolutePath ?? reference.localPath}>
+      {reference.mediaType === 'video' ? (
+        <>
+          <video src={reference.src} muted playsInline />
+          <span className="media-info-panel__play-badge media-info-panel__play-badge--small" />
+        </>
+      ) : (
+        <img src={reference.src} alt="" />
+      )}
     </div>
   )
 }
 
-function MediaInfoPanel({ info }: { info: NonNullable<SelectedMediaInfo> }) {
-  const rows = [
-    ['Prompt', info.prompt],
-    ['Model', info.model],
-    ['Provider', info.provider],
-    ['Mode', info.generationMode],
-    ['Status', info.status],
-    ['Skill', info.skillName],
-    ['Local path', info.localPath],
-    ['Request', info.requestId],
-    ['Execution', info.executionId],
-  ].filter((row): row is [string, string] => Boolean(row[1]))
+function getMediaReferenceLabel(references: MediaReferenceInfo[]) {
+  if (references.length === 0) return 'Reference'
+  if (references.every((reference) => reference.mediaType === 'image')) return 'Image reference'
+  if (references.every((reference) => reference.mediaType === 'video')) return 'Video reference'
+  return 'References'
+}
 
+function formatProviderLabel(provider?: string) {
+  if (!provider) return undefined
+  if (provider === 'atlas' || provider === 'Atlas Cloud') return 'Atlas Cloud'
+  if (provider === 'mock-provider') return 'Mock provider'
+  if (provider === 'openai') return 'OpenAI'
+  if (provider === 'seedance') return 'Seedance'
+  if (provider === 'kling') return 'Kling'
+  return provider
+}
+function MediaInfoRow({ label, value, copyable = false }: { label: string; value: string; copyable?: boolean }) {
   return (
-    <aside className="media-info-panel" aria-label="Selected media information">
-      <div className="media-info-panel__header">
-        <span className="media-info-panel__thumb" aria-hidden="true" />
-        <div>
-          <div className="media-info-panel__title">{info.title || 'Media asset'}</div>
-          <div className="media-info-panel__subtitle">Asset details</div>
-        </div>
+    <div className="media-info-panel__row">
+      <div className="media-info-panel__row-heading">
+        <span>{label}</span>
+        {copyable ? (
+          <button
+            type="button"
+            className="media-info-panel__copy"
+            aria-label={`Copy ${label}`}
+            onPointerDownCapture={(event) => event.stopPropagation()}
+            onMouseDownCapture={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              void copyTextToClipboard(value, event.currentTarget.ownerDocument.defaultView)
+            }}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="5.5" y="3.5" width="7" height="9" rx="1.5" />
+              <path d="M3.5 10.5V5A1.5 1.5 0 0 1 5 3.5h5.5" />
+            </svg>
+          </button>
+        ) : null}
       </div>
-      <div className="media-info-panel__rows">
-        {rows.map(([label, value]) => (
-          <div className="media-info-panel__row" key={label}>
-            <span>{label}</span>
-            <p>{value}</p>
-          </div>
-        ))}
-      </div>
-    </aside>
+      <p>{value}</p>
+    </div>
   )
+}
+
+async function copyTextToClipboard(value: string, targetWindow: Window | null) {
+  try {
+    await targetWindow?.navigator.clipboard?.writeText(value)
+  } catch {
+    // Best-effort utility for a non-critical metadata affordance.
+  }
 }
 
 function FrameCodexAction({
   action,
-  activeSkillSession,
-  isGenerating,
-  onGenerate,
   onSend,
 }: {
   action: NonNullable<FrameActionState>
-  activeSkillSession: ActiveSkillSession
-  isGenerating: boolean
-  onGenerate: (frameId: string) => void
   onSend: (frameId: string) => void
 }) {
-  const isGenerateMode = Boolean(activeSkillSession?.autoRun)
+  const editor = useEditor()
+  const toolbarRef = useRef<HTMLDivElement | null>(null)
   const sendTitle = `Send ${action.frameName} context to Codex`
-  const generateTitle = `Generate a new version from ${action.frameName} using ${activeSkillSession?.displayName}`
 
-  function keepPrimaryPointerOnButton(event: PointerEvent<HTMLButtonElement> | MouseEvent<HTMLButtonElement>) {
-    if ('button' in event && event.button !== 0) return
-    event.stopPropagation()
-  }
+  useEffect(() => {
+    const appWindow = editor.getContainer().ownerDocument.defaultView ?? window
+    let rafId: number | null = null
+    let lastPositionKey = ''
+
+    const syncPosition = () => {
+      const toolbar = toolbarRef.current
+      const frame = editor.getShape(action.frameId as TLShapeId)
+      const bounds = frame ? editor.getShapePageBounds(frame) : undefined
+
+      if (!toolbar || !bounds) {
+        if (toolbar) toolbar.style.display = 'none'
+        rafId = appWindow.requestAnimationFrame(syncPosition)
+        return
+      }
+
+      const topLeft = editor.pageToScreen({ x: bounds.x, y: bounds.y })
+      const topRight = editor.pageToScreen({ x: bounds.x + bounds.w, y: bounds.y })
+      const left = Math.max(12, (topLeft.x + topRight.x) / 2)
+      const top = Math.max(56, topLeft.y - 10)
+      const positionKey = `${left.toFixed(2)}:${top.toFixed(2)}`
+
+      if (positionKey !== lastPositionKey) {
+        lastPositionKey = positionKey
+        toolbar.style.display = 'flex'
+        toolbar.style.transform = `translate3d(${left}px, ${top}px, 0) translate(-50%, -100%)`
+      }
+
+      rafId = appWindow.requestAnimationFrame(syncPosition)
+    }
+
+    syncPosition()
+
+    return () => {
+      if (rafId !== null) appWindow.cancelAnimationFrame(rafId)
+    }
+  }, [editor, action.frameId])
 
   return (
     <div
-      className="frame-action-group"
-      style={{ left: action.left, top: action.top }}
-      onContextMenu={(event) => event.stopPropagation()}
+      ref={toolbarRef}
+      className="codex-frame-contextual-toolbar"
+      role="toolbar"
+      aria-label="Frame actions"
+      style={{ transform: `translate3d(${action.left}px, ${action.top}px, 0) translate(-50%, -100%)` }}
+      onPointerDownCapture={(event) => event.stopPropagation()}
+      onMouseDownCapture={(event) => event.stopPropagation()}
     >
       <button
         type="button"
-        className="frame-action-button"
-        data-mode="send"
-        onPointerDownCapture={keepPrimaryPointerOnButton}
-        onPointerUpCapture={keepPrimaryPointerOnButton}
-        onMouseDownCapture={keepPrimaryPointerOnButton}
+        className="codex-frame-action-button"
+        title={sendTitle}
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
           onSend(action.frameId)
         }}
-        title={sendTitle}
       >
-        <span className="frame-action-button__icon" aria-hidden="true">
-          <svg viewBox="0 0 16 16" focusable="false">
-            <path d="M3 2.75A1.75 1.75 0 0 1 4.75 1h6.5A1.75 1.75 0 0 1 13 2.75v10.5A1.75 1.75 0 0 1 11.25 15h-6.5A1.75 1.75 0 0 1 3 13.25V2.75Zm1.5 0v10.5c0 .14.11.25.25.25h6.5c.14 0 .25-.11.25-.25V2.75a.25.25 0 0 0-.25-.25h-6.5a.25.25 0 0 0-.25.25Z" />
-            <path d="M7.25 4.75h1.5v3.69l1.22-1.22 1.06 1.06L8 11.31 4.97 8.28l1.06-1.06 1.22 1.22V4.75Z" />
-          </svg>
-        </span>
+        <ExternalLinkActionIcon />
         <span>Send to Codex</span>
       </button>
-      {isGenerateMode ? (
-        <button
-          type="button"
-          className="frame-action-button"
-          data-mode="generate"
-          onPointerDownCapture={keepPrimaryPointerOnButton}
-          onPointerUpCapture={keepPrimaryPointerOnButton}
-          onMouseDownCapture={keepPrimaryPointerOnButton}
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            onGenerate(action.frameId)
-          }}
-          disabled={isGenerating}
-          title={generateTitle}
-        >
-          <span className="frame-action-button__icon" aria-hidden="true">
-            <svg viewBox="0 0 16 16" focusable="false">
-              <path d="M8.3 1.5 9.8 5l3.7 1.4-3.7 1.5-1.5 3.6-1.5-3.6L3.1 6.4 6.8 5l1.5-3.5Z" />
-              <path d="M3.7 10.1 4.4 12l1.9.7-1.9.8-.7 1.8-.8-1.8-1.8-.8 1.8-.7.8-1.9Z" />
-            </svg>
-          </span>
-          <span>{isGenerating ? 'Generating…' : 'Generate version'}</span>
-        </button>
-      ) : null}
     </div>
+  )
+}
+
+function ExternalLinkActionIcon() {
+  return (
+    <span className="codex-frame-action-external" aria-hidden="true">
+      <svg viewBox="0 0 20 20">
+        <path d="M7 4.75H4.75v10.5h10.5V13" />
+        <path d="M10.25 4.75h5v5" />
+        <path d="m9.25 10.75 5.75-5.75" />
+      </svg>
+    </span>
   )
 }
 
@@ -1126,44 +1403,217 @@ function getSelectedMediaInfo(editor: Editor): SelectedMediaInfo {
 
   const props = selectedMedia.props as Record<string, unknown>
   const metadata = getMediaMetadata(editor, selectedMedia)
+  const assetId = stringFromUnknown(props.assetId)
+  const asset = assetId ? (editor.getAsset(assetId as TLAssetId) as TLAsset | undefined) : undefined
+  const assetProps = (asset?.props ?? {}) as Record<string, unknown>
+  const assetMeta = (asset?.meta ?? {}) as Record<string, unknown>
+  const bounds = getShapePageBoundsRecord(editor, selectedMedia)
+  const overlayPosition = getMediaInfoOverlayPosition(editor, selectedMedia)
+
+  const mediaType = getSelectedShapeMediaType(selectedMedia, props, assetProps, metadata)
+  const previewSrc =
+    stringFromUnknown(assetProps.src) ??
+    stringFromUnknown(props.src) ??
+    stringFromUnknown(metadata.src) ??
+    srcFromLocalPath(stringFromUnknown(metadata.localPath) ?? stringFromUnknown(props.localPath))
+  const references = getMediaReferencePreviewItems(metadata).filter((reference) => {
+    if (reference.src === previewSrc) return false
+    if (reference.assetId && reference.assetId === assetId) return false
+    if (reference.shapeId && reference.shapeId === selectedMedia.id) return false
+    return true
+  })
+  const intrinsicWidth = numberFromUnknown(metadata.outputWidth) ?? numberFromUnknown(assetProps.w) ?? numberFromUnknown(props.w) ?? bounds.w
+  const intrinsicHeight = numberFromUnknown(metadata.outputHeight) ?? numberFromUnknown(assetProps.h) ?? numberFromUnknown(props.h) ?? bounds.h
+  const resolution = stringFromUnknown(metadata.resolution) ?? formatPixelResolution(intrinsicWidth, intrinsicHeight)
+  const size = stringFromUnknown(metadata.size) ?? stringFromUnknown(metadata.aspectRatio) ?? formatAspectRatio(intrinsicWidth, intrinsicHeight)
+
   return {
-    title: stringFromUnknown(metadata.title) ?? stringFromUnknown(props.title) ?? (selectedMedia.type === 'video' ? 'Video asset' : 'Image asset'),
-    prompt: stringFromUnknown(metadata.prompt) ?? stringFromUnknown(props.prompt),
+    shapeId: selectedMedia.id,
+    title: stringFromUnknown(metadata.title) ?? stringFromUnknown(assetProps.name) ?? stringFromUnknown(props.title) ?? (mediaType === 'video' ? 'Video asset' : 'Image asset'),
+    mediaType,
+    triggerLeft: overlayPosition.triggerLeft,
+    triggerTop: overlayPosition.triggerTop,
+    panelLeft: overlayPosition.panelLeft,
+    panelTop: overlayPosition.panelTop,
+    showTrigger: overlayPosition.showTrigger,
+    previewSrc,
+    prompt: getDisplayPromptFromMedia(metadata, props),
     provider: stringFromUnknown(metadata.provider) ?? stringFromUnknown(props.provider),
     model: stringFromUnknown(metadata.model) ?? stringFromUnknown(props.model),
-    generationMode: stringFromUnknown(metadata.generationMode) ?? stringFromUnknown(props.generationMode),
-    status: stringFromUnknown(metadata.status) ?? stringFromUnknown(props.status),
     skillName: stringFromUnknown(metadata.skillName) ?? stringFromUnknown(props.skillName),
-    localPath: stringFromUnknown(metadata.localPath) ?? stringFromUnknown(props.localPath) ?? stringFromUnknown(props.assetId),
-    requestId: stringFromUnknown(metadata.requestId) ?? stringFromUnknown(props.requestId),
-    executionId: stringFromUnknown(metadata.executionId) ?? stringFromUnknown(props.executionId),
+    absolutePath: stringFromUnknown(metadata.absolutePath) ?? stringFromUnknown(props.absolutePath) ?? stringFromUnknown(assetMeta.absolutePath),
+    size,
+    resolution,
+    quality: stringFromUnknown(metadata.quality) ?? stringFromUnknown(props.quality) ?? stringFromUnknown(assetMeta.quality),
+    references: references.length > 0 ? references : undefined,
   }
+}
+
+function getMediaInfoOverlayPosition(editor: Editor, shape: TLShape) {
+  const bounds = editor.getShapePageBounds(shape.id)
+  if (!bounds) {
+    return {
+      triggerLeft: -9999,
+      triggerTop: -9999,
+      panelLeft: -9999,
+      panelTop: -9999,
+      showTrigger: false,
+    }
+  }
+
+  const topLeft = editor.pageToScreen({ x: bounds.x, y: bounds.y })
+  const topRight = editor.pageToScreen({ x: bounds.x + bounds.w, y: bounds.y })
+  const bottomRight = editor.pageToScreen({ x: bounds.x + bounds.w, y: bounds.y + bounds.h })
+  const viewport = editor.getViewportScreenBounds()
+  const visualWidth = Math.abs(topRight.x - topLeft.x)
+  const visualHeight = Math.abs(bottomRight.y - topRight.y)
+  const visualArea = visualWidth * visualHeight
+  const viewportArea = Math.max(1, viewport.w * viewport.h)
+  const showTrigger =
+    visualWidth >= 150 &&
+    visualHeight >= 120 &&
+    visualArea >= viewportArea * 0.018 &&
+    topRight.x >= viewport.x - 64 &&
+    topRight.x <= viewport.x + viewport.w + 64 &&
+    topRight.y >= viewport.y - 64 &&
+    topRight.y <= viewport.y + viewport.h + 64
+
+  return {
+    triggerLeft: Math.round(topRight.x - 36),
+    triggerTop: Math.round(topRight.y + 10),
+    panelLeft: Math.round(topRight.x + 12),
+    panelTop: Math.round(topRight.y + 4),
+    showTrigger,
+  }
+}
+
+function getMediaReferencePreviewItems(metadata: Record<string, unknown>): MediaReferenceInfo[] {
+  const rawReferences = metadata.references
+  if (!Array.isArray(rawReferences)) return []
+
+  return rawReferences
+    .map(mediaReferenceFromUnknown)
+    .filter((reference): reference is MediaReferenceInfo => Boolean(reference))
+    .slice(0, 6)
+}
+
+function mediaReferenceFromUnknown(value: unknown): MediaReferenceInfo | undefined {
+  const record = recordFromUnknown(value)
+  if (!record) return undefined
+
+  const localPath = stringFromUnknown(record.localPath)
+  const absolutePath = stringFromUnknown(record.absolutePath)
+  const src = stringFromUnknown(record.src) ?? srcFromLocalPath(localPath)
+  if (!src) return undefined
+
+  const rawMediaType = stringFromUnknown(record.mediaType)
+  const mediaType = rawMediaType === 'video' || looksLikeVideoPath(src) || looksLikeVideoPath(localPath) || looksLikeVideoPath(absolutePath) ? 'video' : 'image'
+  if (rawMediaType && rawMediaType !== 'image' && rawMediaType !== 'video') return undefined
+
+  return {
+    mediaType,
+    src,
+    shapeId: stringFromUnknown(record.shapeId),
+    assetId: stringFromUnknown(record.assetId),
+    title: stringFromUnknown(record.title) ?? stringFromUnknown(record.role) ?? getFileNameFromPath(absolutePath ?? localPath ?? src),
+    localPath,
+    absolutePath,
+  }
+}
+function getSelectedShapeMediaType(
+  shape: TLShape,
+  props: Record<string, unknown>,
+  assetProps: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): 'image' | 'video' {
+  if (shape.type === 'video') return 'video'
+  if (stringFromUnknown(metadata.mediaType) === 'video' || stringFromUnknown(props.mediaType) === 'video') return 'video'
+  if (stringFromUnknown(assetProps.mimeType)?.startsWith('video/') || stringFromUnknown(props.mimeType)?.startsWith('video/')) return 'video'
+  if (
+    looksLikeVideoPath(stringFromUnknown(assetProps.src)) ||
+    looksLikeVideoPath(stringFromUnknown(props.src)) ||
+    looksLikeVideoPath(stringFromUnknown(metadata.localPath)) ||
+    looksLikeVideoPath(stringFromUnknown(props.localPath))
+  ) {
+    return 'video'
+  }
+  return 'image'
+}
+
+function getDisplayPromptFromMedia(metadata: Record<string, unknown>, props: Record<string, unknown>) {
+  return (
+    stringFromUnknown(metadata.displayPrompt) ??
+    stringFromUnknown(metadata.userPrompt) ??
+    stringFromUnknown(props.displayPrompt) ??
+    stringFromUnknown(props.userPrompt) ??
+    cleanProviderPromptForDisplay(stringFromUnknown(metadata.prompt) ?? stringFromUnknown(props.prompt))
+  )
+}
+
+function cleanProviderPromptForDisplay(prompt?: string) {
+  if (!prompt) return undefined
+  const normalized = prompt.trim()
+  const instructionMatch = normalized.match(/Canvas edit instructions:\s*([\s\S]*?)(?:\n\n|$)/i)
+  const annotationLines = instructionMatch?.[1]
+    ?.split('\n')
+    .map((line) => line.replace(/^\s*[-•]\s*/, '').trim())
+    .filter(Boolean)
+  if (annotationLines && annotationLines.length > 0) return annotationLines.join('\n')
+
+  const cleaned = normalized
+    .split('\n')
+    .filter((line) => !/^Use selected canvas/i.test(line.trim()))
+    .filter((line) => !/^Use the selected canvas/i.test(line.trim()))
+    .filter((line) => !/^Do not render canvas annotations/i.test(line.trim()))
+    .filter((line) => !/^Spatial guidance:/i.test(line.trim()))
+    .join('\n')
+    .trim()
+
+  return cleaned.length > 0 ? cleaned : undefined
 }
 
 function createNativeGeneratedMediaRecords(input: {
   command: CanvasCommand
   childId: TLShapeId
+  parentId: TLShape['parentId']
   bounds: Bounds
   src: string
   versionId: string
 }): { asset: TLAsset; shape: TLShapePartial } {
-  const { command, childId, bounds, src, versionId } = input
+  const { command, childId, parentId, bounds, src, versionId } = input
   const mediaType = getCommandMediaType(command)
   const assetId = AssetRecordType.createId()
+  const title = command.title ?? (mediaType === 'video' ? 'Codex generated video' : 'Codex generated image')
   const metadata = compactRecord({
     versionId,
     localPath: command.localPath,
     absolutePath: command.absolutePath,
     src,
     mediaType,
-    title: command.title ?? (mediaType === 'video' ? 'Codex generated video' : 'Codex generated image'),
+    title,
     prompt: command.prompt,
+    displayPrompt: cleanProviderPromptForDisplay(command.prompt),
     provider: command.provider ?? 'codex',
     model: command.model,
     generationMode: command.generationMode,
+    references: command.references,
     requestId: command.id,
     status: command.status ?? 'succeeded',
-    skillName: command.skillName ?? (mediaType === 'video' ? 'codex-media-canvas-video' : 'codex-media-canvas-image'),
+    skillName: command.skillName ?? (mediaType === 'video' ? 'coflow-video' : 'coflow-image'),
+    generationStartedAt: command.generationStartedAt,
+    generationCompletedAt: command.generationCompletedAt,
+    generationDurationMs: command.generationDurationMs,
+    generationDuration: formatDurationMs(command.generationDurationMs),
+    providerTimings: command.providerTimings,
+    e2eStartedAt: command.e2eStartedAt,
+    e2eCompletedAt: command.e2eCompletedAt,
+    e2eDurationMs: command.e2eDurationMs,
+    e2eDuration: formatDurationMs(command.e2eDurationMs),
+    writebackCompletedAt: command.writebackCompletedAt,
+    outputWidth: command.outputWidth,
+    outputHeight: command.outputHeight,
+    size: formatAspectRatio(command.outputWidth, command.outputHeight),
+    resolution: formatPixelResolution(command.outputWidth, command.outputHeight),
   })
   const name = getFileNameFromPath(command.localPath ?? command.absolutePath ?? src) ?? metadata.title
 
@@ -1180,25 +1630,55 @@ function createNativeGeneratedMediaRecords(input: {
       isAnimated: mediaType === 'video',
     },
     meta: {
-      codexMediaCanvas: metadata,
+      coflow: metadata,
     },
   } as TLAsset
 
-  const shape = {
+  const baseShape = {
     id: childId,
-    type: mediaType,
+    parentId,
     x: bounds.x,
     y: bounds.y,
+    rotation: 0,
+    isLocked: false,
     opacity: 1,
-    props: {
-      assetId,
-      w: bounds.w,
-      h: bounds.h,
-    },
     meta: {
-      codexMediaCanvas: metadata,
+      coflow: metadata,
     },
-  } as TLShapePartial
+  }
+
+  const shape = (
+    mediaType === 'image'
+      ? {
+          ...baseShape,
+          type: 'image',
+          props: {
+            assetId,
+            w: bounds.w,
+            h: bounds.h,
+            playing: false,
+            url: src,
+            altText: title,
+            crop: null,
+            flipX: false,
+            flipY: false,
+          },
+        }
+      : {
+          ...baseShape,
+          type: 'video',
+          props: {
+            assetId,
+            w: bounds.w,
+            h: bounds.h,
+            playing: false,
+            url: src,
+            altText: title,
+            time: 0,
+            autoplay: false,
+          },
+        }
+  ) as TLShapePartial
 
   return { asset, shape }
 }
@@ -1225,6 +1705,7 @@ function normalizeLegacyDefaultArrowBends(editor: Editor, records: unknown[] = e
 
 function syncAnnotationArrowStyles(editor: Editor, records: unknown[] = editor.store.allRecords()) {
   const updates: TLShapePartial[] = []
+  let latestColor: TLArrowShape['props']['color'] | undefined
   for (const record of records) {
     const shape = record as TLArrowShape
     if (!shape || shape.typeName !== 'shape' || shape.type !== 'arrow') continue
@@ -1232,17 +1713,20 @@ function syncAnnotationArrowStyles(editor: Editor, records: unknown[] = editor.s
 
     const props = shape.props
     const nextProps: Partial<TLArrowShape['props']> = {}
-    if (props.color && props.labelColor !== props.color) nextProps.labelColor = props.color
-    if (props.labelPosition !== FLOATING_ARROW_LABEL_POSITION) nextProps.labelPosition = FLOATING_ARROW_LABEL_POSITION
-    if (Object.keys(nextProps).length === 0) continue
-
-    updates.push({
+    const update: TLShapePartial = {
       id: shape.id,
       type: 'arrow',
-      props: nextProps,
-    })
+    }
+    if (props.color && props.labelColor !== props.color) nextProps.labelColor = props.color
+    if (props.color) latestColor = props.color
+    if (props.labelPosition !== FLOATING_ARROW_LABEL_POSITION) nextProps.labelPosition = FLOATING_ARROW_LABEL_POSITION
+    if (Object.keys(nextProps).length > 0) update.props = nextProps
+    if (!update.props) continue
+
+    updates.push(update)
   }
 
+  if (latestColor) editor.setStyleForNextShapes(DefaultColorStyle, latestColor)
   if (updates.length === 0) return
   editor.run(() => editor.updateShapes(updates), { history: 'ignore' })
 }
@@ -1268,6 +1752,36 @@ function getShapePageBoundsRecord(editor: Editor, shape: TLShape): Bounds {
   }
 }
 
+function getGeneratedMediaOutputSize(command: CanvasCommand, anchorBounds: Bounds): { w: number; h: number } {
+  const mediaType = getCommandMediaType(command)
+  const outputDimensions = getCommandOutputDimensions(command)
+  if (!outputDimensions) return { w: anchorBounds.w, h: anchorBounds.h }
+
+  const targetWidth = mediaType === 'video' ? clampNumber(Math.max(anchorBounds.w, 520), 360, 720) : anchorBounds.w
+  const aspectRatio = outputDimensions.w / outputDimensions.h
+  return {
+    w: targetWidth,
+    h: targetWidth / aspectRatio,
+  }
+}
+
+function getCommandOutputDimensions(command: CanvasCommand): { w: number; h: number } | undefined {
+  const w = Number(command.outputWidth)
+  const h = Number(command.outputHeight)
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return undefined
+  return { w, h }
+}
+
+function getVersionPlacementOccupiedBounds(shapes: CanvasShapeRecord[], anchorShapeId?: string, frameId?: string): Bounds[] {
+  return shapes
+    .filter((shape) => shape.id !== anchorShapeId && shape.id !== frameId && shape.type !== 'frame')
+    .map(getShapeBounds)
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
 function getBoundsCenter(bounds: Bounds) {
   return {
     x: bounds.x + bounds.w / 2,
@@ -1282,8 +1796,50 @@ function stringFromUnknown(value: unknown) {
 function srcFromLocalPath(localPath?: string) {
   if (!localPath) return undefined
   if (localPath.startsWith('/asset-store/')) return localPath
-  if (localPath.startsWith('.codex-media-canvas/')) return `/asset-store/${localPath.slice('.codex-media-canvas/'.length)}`
+  if (localPath.startsWith('.coflow/')) return `/asset-store/${localPath.slice('.coflow/'.length)}`
   return undefined
+}
+
+function formatPixelResolution(width: unknown, height: unknown) {
+  const w = numberFromUnknown(width)
+  const h = numberFromUnknown(height)
+  if (!w || !h) return undefined
+  return `${Math.round(w)} × ${Math.round(h)}`
+}
+
+function formatAspectRatio(width: unknown, height: unknown) {
+  const w = numberFromUnknown(width)
+  const h = numberFromUnknown(height)
+  if (!w || !h) return undefined
+  const ratio = w / h
+  const commonRatios: Array<[number, number]> = [
+    [1, 1],
+    [3, 4],
+    [4, 3],
+    [9, 16],
+    [16, 9],
+    [2, 3],
+    [3, 2],
+    [21, 9],
+  ]
+  const closeMatch = commonRatios.find(([rw, rh]) => Math.abs(ratio - rw / rh) < 0.035)
+  if (closeMatch) return `${closeMatch[0]}:${closeMatch[1]}`
+  const roundedW = Math.round(w)
+  const roundedH = Math.round(h)
+  const divisor = greatestCommonDivisor(roundedW, roundedH)
+  if (divisor <= 0) return undefined
+  return `${Math.round(roundedW / divisor)}:${Math.round(roundedH / divisor)}`
+}
+
+function greatestCommonDivisor(a: number, b: number): number {
+  let x = Math.abs(a)
+  let y = Math.abs(b)
+  while (y > 0) {
+    const next = x % y
+    x = y
+    y = next
+  }
+  return x
 }
 
 function getCommandMediaType(command: CanvasCommand): 'image' | 'video' {
@@ -1328,6 +1884,8 @@ function getMediaMetadata(editor: Editor, shape: TLShape) {
   return {
     ...recordFromUnknown(assetMeta.codexMediaCanvas),
     ...recordFromUnknown(shapeMeta.codexMediaCanvas),
+    ...recordFromUnknown(assetMeta.coflow),
+    ...recordFromUnknown(shapeMeta.coflow),
   }
 }
 
@@ -1369,17 +1927,87 @@ function toCanvasShapeRecords(editor: Editor, shapes: TLShape[]): CanvasShapeRec
 
 async function buildSelectionSnapshot(editor: Editor): Promise<CanvasSelectionSnapshot> {
   const selectedShapes = editor.getSelectedShapes()
-  const shapes = toCanvasShapeRecords(editor, editor.getCurrentPageShapesSorted())
+  const currentPageShapes = editor.getCurrentPageShapesSorted()
+  const shapes = toCanvasShapeRecords(editor, currentPageShapes)
   const activeFrameRecord = findActiveFrameForSelection(editor, shapes)
   const activeFrame = activeFrameRecord ? await extractMaterializedFrameContext(editor, shapes, activeFrameRecord.id) : undefined
+  const viewportBounds = editor.getViewportPageBounds()
+  const viewport: CanvasSelectionSnapshot['viewport'] = {
+    bounds: {
+      x: viewportBounds.x,
+      y: viewportBounds.y,
+      w: viewportBounds.w,
+      h: viewportBounds.h,
+    },
+    camera: editor.getCamera(),
+    items: await Promise.all(
+      currentPageShapes
+        .filter((shape) => shape.type !== 'frame')
+        .filter((shape) => boundsIntersect(getShapePageBoundsRecord(editor, shape), viewportBounds))
+        .map((shape) => toCanvasItem(editor, shape)),
+    ),
+  }
 
   return {
     version: 1,
     selectedIds: selectedShapes.map((shape) => shape.id),
     selectedItems: await Promise.all(selectedShapes.map((shape) => toCanvasItem(editor, shape))),
     activeFrame,
+    viewport,
     updatedAt: new Date().toISOString(),
   }
+}
+
+function boundsIntersect(a: Bounds, b: Bounds) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+}
+
+function getSelectionPublicationKey(selection: CanvasSelectionSnapshot) {
+  return JSON.stringify({
+    selectedIds: selection.selectedIds,
+    selectedItems: selection.selectedItems.map(selectionItemPublicationKey),
+    activeFrameId: selection.activeFrame?.frameId,
+    viewport: selection.viewport
+      ? {
+          bounds: roundedBounds(selection.viewport.bounds),
+          camera: selection.viewport.camera
+            ? {
+                x: roundCanvasNumber(selection.viewport.camera.x),
+                y: roundCanvasNumber(selection.viewport.camera.y),
+                z: roundCanvasNumber(selection.viewport.camera.z),
+              }
+            : undefined,
+          items: selection.viewport.items.map(selectionItemPublicationKey),
+        }
+      : undefined,
+  })
+}
+
+function selectionItemPublicationKey(item: CanvasItem) {
+  return {
+    id: item.id,
+    kind: item.kind,
+    canvasType: item.canvasType,
+    parentId: item.parentId,
+    bounds: roundedBounds(item.bounds),
+    text: item.text,
+    assetId: item.asset?.assetId,
+    localPath: item.asset?.localPath,
+  }
+}
+
+function roundedBounds(bounds: Bounds) {
+  return {
+    x: roundCanvasNumber(bounds.x),
+    y: roundCanvasNumber(bounds.y),
+    w: roundCanvasNumber(bounds.w),
+    h: roundCanvasNumber(bounds.h),
+    rotation: bounds.rotation === undefined ? undefined : roundCanvasNumber(bounds.rotation),
+  }
+}
+
+function roundCanvasNumber(value: number) {
+  return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : value
 }
 
 async function toCanvasItem(editor: Editor, shape: TLShape): Promise<CanvasItem> {
@@ -1444,7 +2072,7 @@ async function getCanvasAssetContext(editor: Editor, shape: TLShape, props: Reco
   let absolutePath = stringFromUnknown(props.absolutePath) ?? stringFromUnknown(assetMeta.absolutePath)
 
   if (!localPath && src?.startsWith('/asset-store/')) {
-    localPath = `.codex-media-canvas/${src.slice('/asset-store/'.length)}`
+    localPath = `.coflow/${src.slice('/asset-store/'.length)}`
   }
 
   if ((!localPath || !absolutePath) && src?.startsWith('data:')) {
@@ -1518,6 +2146,24 @@ function pickMetadata(props: Record<string, unknown>, keys: string[]) {
 
 function numberFromUnknown(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function getDurationMs(startedAt?: string, completedAt?: string) {
+  if (!startedAt || !completedAt) return undefined
+  const started = new Date(startedAt).getTime()
+  const completed = new Date(completedAt).getTime()
+  if (!Number.isFinite(started) || !Number.isFinite(completed) || completed < started) return undefined
+  return completed - started
+}
+
+function formatDurationMs(value: unknown) {
+  const durationMs = numberFromUnknown(value)
+  if (durationMs === undefined) return undefined
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)} s`
+  const minutes = Math.floor(durationMs / 60_000)
+  const seconds = Math.round((durationMs - minutes * 60_000) / 1000)
+  return `${minutes}m ${seconds}s`
 }
 
 function findActiveFrameForSelection(editor: Editor, shapes: CanvasShapeRecord[]) {
