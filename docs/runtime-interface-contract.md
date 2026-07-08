@@ -352,7 +352,7 @@ UI rules:
 The server now loads local environment files before reading provider keys:
 
 1. `/Users/qiutian/Projects/apps/coding-agent-canva/.env.local`
-2. `/Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike/.env.local`
+2. `/Users/qiutian/Projects/apps/coding-agent-canva/coflow/.env.local`
 3. `/Users/qiutian/Projects/apps/coding-agent-canva/.env`
 
 Shell environment variables still win over file values.
@@ -360,9 +360,9 @@ Shell environment variables still win over file values.
 Example:
 
 ```bash
-cp phase0-tldraw-spike/.env.local.example .env.local
+cp coflow/.env.local.example .env.local
 # edit .env.local and set ATLASCLOUD_API_KEY
-cd phase0-tldraw-spike
+cd coflow
 npm run serve
 ```
 

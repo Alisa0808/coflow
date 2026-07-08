@@ -2,7 +2,7 @@
 
 言語：[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-このガイドは CoFlow の user-facing skills を説明します。実行時に Codex が読む正規の skill instructions は `phase0-tldraw-spike/skills/*/SKILL.md` にあります。
+このガイドは CoFlow の user-facing skills を説明します。実行時に Codex が読む正規の skill instructions は `coflow/skills/*/SKILL.md` にあります。
 
 ## 基本モデル
 

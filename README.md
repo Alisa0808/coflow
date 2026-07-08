@@ -59,20 +59,20 @@ Not claimed yet:
 The active plugin/runtime lives in:
 
 ```text
-phase0-tldraw-spike/
+coflow/
 ```
 
 Important files:
 
 ```text
-phase0-tldraw-spike/.codex-plugin/plugin.json  # Codex plugin manifest
-phase0-tldraw-spike/.mcp.json                  # MCP server config
-phase0-tldraw-spike/mcp-server.mjs             # Codex-facing MCP tools
-phase0-tldraw-spike/server.mjs                 # local canvas server
-phase0-tldraw-spike/src/                       # tldraw canvas app
-phase0-tldraw-spike/skills/                    # CoFlow Codex skills
-phase0-tldraw-spike/lib/                       # provider/runtime helpers
-phase0-tldraw-spike/tests/                     # regression tests
+coflow/.codex-plugin/plugin.json  # Codex plugin manifest
+coflow/.mcp.json                  # MCP server config
+coflow/mcp-server.mjs             # Codex-facing MCP tools
+coflow/server.mjs                 # local canvas server
+coflow/src/                       # tldraw canvas app
+coflow/skills/                    # CoFlow Codex skills
+coflow/lib/                       # provider/runtime helpers
+coflow/tests/                     # regression tests
 ```
 
 Generated assets and local runtime state are stored under `.coflow/` and are ignored by git.
@@ -80,7 +80,7 @@ Generated assets and local runtime state are stored under `.coflow/` and are ign
 ## Quick Start
 
 ```bash
-cd phase0-tldraw-spike
+cd coflow
 npm install
 npm run build
 npm run serve
@@ -92,7 +92,7 @@ Then open:
 http://127.0.0.1:5176/
 ```
 
-For plugin development, the local personal marketplace can point `~/plugins/coflow` at `phase0-tldraw-spike`, then install with:
+For plugin development, the local personal marketplace can point `~/plugins/coflow` at `coflow`, then install with:
 
 ```bash
 codex plugin add coflow@personal
@@ -120,7 +120,7 @@ Supported local env file locations:
 
 ```text
 .env.local
-phase0-tldraw-spike/.env.local
+coflow/.env.local
 ```
 
 Do not commit API keys or paste secrets into chat.
@@ -145,7 +145,7 @@ Scenario skills:
 
 ## Development Checks
 
-Run from `phase0-tldraw-spike/`:
+Run from `coflow/`:
 
 ```bash
 npm test
@@ -155,7 +155,7 @@ npm run build
 Plugin manifest validation:
 
 ```bash
-python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py phase0-tldraw-spike
+python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py coflow
 ```
 
 ## Design Principles

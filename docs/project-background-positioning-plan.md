@@ -927,7 +927,7 @@ Codex Skill / frame shortcut
 
 - 在隔离目录中跑通官方 agent starter；
 - 确认依赖、目录结构、worker / local server 适配方式；
-- 不修改当前可用的 `phase0-tldraw-spike`。
+- 不修改当前可用的 `coflow`。
 
 验收标准：
 

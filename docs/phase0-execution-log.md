@@ -18,7 +18,7 @@ media shape + native annotations + task frame
 Created:
 
 ```text
-phase0-tldraw-spike/
+coflow/
 ```
 
 This is intentionally separate from `canvas-studio/`, because `canvas-studio/` is a failed prototype whose UI and canvas model should not be continued.
@@ -45,7 +45,7 @@ Implemented:
 Commands:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -144,7 +144,7 @@ Implemented:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -200,7 +200,7 @@ Fixes:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -267,7 +267,7 @@ canvas.get_frame_context
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 npm run serve
@@ -328,7 +328,7 @@ UI changes:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 npm run serve
@@ -397,7 +397,7 @@ Generate
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 npm run serve
@@ -487,7 +487,7 @@ canvas.create_version
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 node -e '... MCP tools/list + canvas.create_version smoke test ...'
@@ -595,7 +595,7 @@ Frontend changes:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 npm run serve
@@ -724,7 +724,7 @@ Why preset images are SVG:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 npm run serve
@@ -890,7 +890,7 @@ Implementation detail:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 npm run serve
@@ -1030,7 +1030,7 @@ max 720 x 520
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 npm run serve
@@ -1187,7 +1187,7 @@ POST /api/executions/run-latest
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -1311,8 +1311,8 @@ POST /api/assets/upload
 - Added:
 
 ```text
-/Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike/src/providerAdapter.ts
-/Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike/dist-contracts/providerAdapter.js
+/Users/qiutian/Projects/apps/coding-agent-canva/coflow/src/providerAdapter.ts
+/Users/qiutian/Projects/apps/coding-agent-canva/coflow/dist-contracts/providerAdapter.js
 ```
 
 - Provider job shape:
@@ -1340,7 +1340,7 @@ type ProviderJob = {
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -1467,7 +1467,7 @@ buildKlingProviderPayload(job)
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -1600,7 +1600,7 @@ ATLAS_PROVIDER_API_KEY
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -1682,7 +1682,7 @@ Provider payload status:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -1736,7 +1736,7 @@ Fix:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -1794,7 +1794,7 @@ Fix:
 Verification:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -1876,7 +1876,7 @@ Codex Skill / Codex chat
 Validation:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -1982,7 +1982,7 @@ Atlas/provider boundary:
 Validation:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm run build
 npm test
 ```
@@ -2060,7 +2060,7 @@ Provider endpoint behavior:
 Validation:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm run build
 npm test
 ```
@@ -2119,7 +2119,7 @@ Key clarification:
 
 Next plan:
 
-- Extract provider execution from `server.mjs` into `phase0-tldraw-spike/lib/provider-executor.mjs`.
+- Extract provider execution from `server.mjs` into `coflow/lib/provider-executor.mjs`.
 - Preserve current mock output behavior.
 - Make latest execution metadata clearly distinguish:
   - mock execution;
@@ -2139,7 +2139,7 @@ Extract provider execution from server.mjs into a dedicated module while preserv
 
 Implementation:
 
-- Added `phase0-tldraw-spike/lib/provider-executor.mjs`.
+- Added `coflow/lib/provider-executor.mjs`.
 - Moved provider-specific logic out of `server.mjs`:
   - provider job construction;
   - Atlas / Seedance / Kling payload construction;
@@ -2160,7 +2160,7 @@ Implementation:
 Validation:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm run build
 npm test
 ```
@@ -2208,7 +2208,7 @@ Integrate the real Atlas Cloud media generation API behind provider=atlas.
 
 Implementation:
 
-- Added `phase0-tldraw-spike/lib/providers/atlas.mjs`.
+- Added `coflow/lib/providers/atlas.mjs`.
 - `provider=atlas` now uses the official Atlas Cloud media API:
   - `POST https://api.atlascloud.ai/api/v1/model/uploadMedia`
   - `POST https://api.atlascloud.ai/api/v1/model/generateImage`
@@ -2253,7 +2253,7 @@ These can and should be overridden with env vars if a specific Atlas model is de
 Validation:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 npm test
 npm run build
 ```
@@ -2271,7 +2271,7 @@ Manual acceptance checklist:
 1. Start server with key:
 
 ```bash
-cd /Users/qiutian/Projects/apps/coding-agent-canva/phase0-tldraw-spike
+cd /Users/qiutian/Projects/apps/coding-agent-canva/coflow
 ATLASCLOUD_API_KEY="..." npm run serve
 ```
 
@@ -2373,10 +2373,10 @@ Changes made:
 
 - Server now loads local env files before reading provider config:
   - project root `.env.local`
-  - `phase0-tldraw-spike/.env.local`
+  - `coflow/.env.local`
   - project root `.env`
 - Added `.gitignore` to exclude `.env*` and `.codex-media-canvas/`.
-- Added `phase0-tldraw-spike/.env.local.example`.
+- Added `coflow/.env.local.example`.
 - Renamed internal execution function from `runMockExecutor` to `runGenerationExecutor`.
 - Added `mockFallback` to execution results so mock fallback is explicit.
 - Canvas generated child title now says `Generated image output` for real provider results and `Mock fallback image` only for fallback.
@@ -2394,7 +2394,7 @@ Manual acceptance checklist:
 1. Create `.env.local` once:
 
 ```bash
-cp phase0-tldraw-spike/.env.local.example .env.local
+cp coflow/.env.local.example .env.local
 ```
 
 2. Put the real key into `.env.local`:
@@ -2406,7 +2406,7 @@ ATLASCLOUD_API_KEY=...
 3. Restart with only:
 
 ```bash
-cd phase0-tldraw-spike
+cd coflow
 npm run serve
 ```
 

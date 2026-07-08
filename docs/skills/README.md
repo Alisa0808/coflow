@@ -2,7 +2,7 @@
 
 Languages: [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-This guide explains the user-facing CoFlow skills. The executable skill instructions remain in `phase0-tldraw-spike/skills/*/SKILL.md`; those files are the canonical runtime instructions for Codex.
+This guide explains the user-facing CoFlow skills. The executable skill instructions remain in `coflow/skills/*/SKILL.md`; those files are the canonical runtime instructions for Codex.
 
 ## Core Mental Model
 

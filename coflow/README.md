@@ -27,7 +27,7 @@ Full 3D canvas preview/editing is not claimed yet. The current 3D skill defines 
 ## Quick start
 
 ```bash
-cd phase0-tldraw-spike
+cd coflow
 cp .env.local.example .env.local
 npm install
 npm run serve
@@ -64,7 +64,7 @@ If Atlas Cloud is the selected provider for real generation, add credentials to 
 
 ```text
 <repo>/.env.local
-<repo>/phase0-tldraw-spike/.env.local
+<repo>/coflow/.env.local
 ```
 
 Required:
@@ -172,7 +172,7 @@ When multiple possible source assets are visible and none is selected or framed,
 Generated media and metadata are local-first under:
 
 ```text
-phase0-tldraw-spike/.coflow/
+coflow/.coflow/
 ```
 
 This directory is ignored by git. It may contain uploaded assets, generated outputs, execution snapshots, and operation logs.
@@ -180,7 +180,7 @@ This directory is ignored by git. It may contain uploaded assets, generated outp
 ## Development
 
 ```bash
-cd phase0-tldraw-spike
+cd coflow
 npm test
 npm run build
 ```

@@ -3,7 +3,7 @@
     "coflow": {
       "command": "node",
       "args": [
-        "phase0-tldraw-spike/mcp-server.mjs"
+        "coflow/mcp-server.mjs"
       ],
       "cwd": "."
     }

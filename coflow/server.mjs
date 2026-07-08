@@ -76,7 +76,7 @@ const server = createServer(async (request, response) => {
       const body = await readJsonBody(request)
       await writeJson(latestFrameContextPath, {
         updatedAt: new Date().toISOString(),
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         context: body,
       })
       await appendOperation({ type: 'frame-context.updated', context: body })
@@ -92,7 +92,7 @@ const server = createServer(async (request, response) => {
       const selection = normalizeSelectionSnapshot(body)
       await writeJson(latestSelectionPath, {
         updatedAt: new Date().toISOString(),
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         selection,
       })
       await appendOperation({ type: 'selection.updated', selection })
@@ -127,7 +127,7 @@ const server = createServer(async (request, response) => {
       const captureResponse = {
         id: requestId,
         updatedAt: new Date().toISOString(),
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         selection,
       }
       await writeJson(latestSelectionPath, captureResponse)
@@ -165,7 +165,7 @@ const server = createServer(async (request, response) => {
       const document = {
         version: 1,
         updatedAt: new Date().toISOString(),
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         clientVersion: typeof body.clientVersion === 'string' ? body.clientVersion : undefined,
         currentPageId: typeof body.currentPageId === 'string' ? body.currentPageId : undefined,
         camera: normalizeCamera(body.camera),
@@ -193,7 +193,7 @@ const server = createServer(async (request, response) => {
       const viewState = {
         version: 1,
         updatedAt: new Date().toISOString(),
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         currentPageId: typeof body.currentPageId === 'string' ? body.currentPageId : undefined,
         camera: normalizeCamera(body.camera),
       }
@@ -206,7 +206,7 @@ const server = createServer(async (request, response) => {
       const body = await readJsonBody(request)
       await writeJson(latestGenerationRequestPath, {
         updatedAt: new Date().toISOString(),
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         request: body,
       })
       await appendOperation({ type: 'generation.requested', request: body })
@@ -296,12 +296,12 @@ const server = createServer(async (request, response) => {
       frameRequest.frameInput = frameInput
       await writeJson(latestCodexFrameRequestPath, {
         updatedAt: at,
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         request: frameRequest,
       })
       await writeJson(latestFrameInputPath, {
         updatedAt: at,
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         frameInput,
       })
       await appendOperation({ type: 'codex.frame_request.created', request: frameRequest })
@@ -320,7 +320,7 @@ const server = createServer(async (request, response) => {
       const screenshot = await saveFrameScreenshot(request)
       await writeJson(latestFrameScreenshotPath, {
         updatedAt: new Date().toISOString(),
-        source: 'phase0-tldraw-spike',
+        source: 'coflow',
         screenshot,
       })
       await appendOperation({ type: 'codex.frame_screenshot.saved', screenshot })

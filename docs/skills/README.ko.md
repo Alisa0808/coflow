@@ -2,7 +2,7 @@
 
 언어: [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-이 가이드는 CoFlow의 user-facing skills를 설명합니다. Codex가 실제로 읽는 실행용 skill instructions는 `phase0-tldraw-spike/skills/*/SKILL.md`에 있으며, 그 파일들이 canonical runtime instructions입니다.
+이 가이드는 CoFlow의 user-facing skills를 설명합니다. Codex가 실제로 읽는 실행용 skill instructions는 `coflow/skills/*/SKILL.md`에 있으며, 그 파일들이 canonical runtime instructions입니다.
 
 ## 핵심 모델
 

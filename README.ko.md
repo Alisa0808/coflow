@@ -59,20 +59,20 @@ CoFlow는 Phase 1 RC 상태이며 이미지/비디오 생성과 writeback 루프
 활성 plugin/runtime 위치:
 
 ```text
-phase0-tldraw-spike/
+coflow/
 ```
 
 중요 파일:
 
 ```text
-phase0-tldraw-spike/.codex-plugin/plugin.json  # Codex plugin manifest
-phase0-tldraw-spike/.mcp.json                  # MCP server config
-phase0-tldraw-spike/mcp-server.mjs             # Codex-facing MCP tools
-phase0-tldraw-spike/server.mjs                 # local canvas server
-phase0-tldraw-spike/src/                       # tldraw canvas app
-phase0-tldraw-spike/skills/                    # CoFlow Codex skills
-phase0-tldraw-spike/lib/                       # provider/runtime helpers
-phase0-tldraw-spike/tests/                     # regression tests
+coflow/.codex-plugin/plugin.json  # Codex plugin manifest
+coflow/.mcp.json                  # MCP server config
+coflow/mcp-server.mjs             # Codex-facing MCP tools
+coflow/server.mjs                 # local canvas server
+coflow/src/                       # tldraw canvas app
+coflow/skills/                    # CoFlow Codex skills
+coflow/lib/                       # provider/runtime helpers
+coflow/tests/                     # regression tests
 ```
 
 생성 에셋과 로컬 런타임 상태는 `.coflow/` 아래 저장되며 git에서 무시됩니다.
@@ -80,7 +80,7 @@ phase0-tldraw-spike/tests/                     # regression tests
 ## Quick Start
 
 ```bash
-cd phase0-tldraw-spike
+cd coflow
 npm install
 npm run build
 npm run serve
@@ -92,7 +92,7 @@ npm run serve
 http://127.0.0.1:5176/
 ```
 
-plugin 개발에서는 local personal marketplace의 `~/plugins/coflow`가 `phase0-tldraw-spike`를 가리키게 한 뒤 설치합니다:
+plugin 개발에서는 local personal marketplace의 `~/plugins/coflow`가 `coflow`를 가리키게 한 뒤 설치합니다:
 
 ```bash
 codex plugin add coflow@personal
@@ -120,7 +120,7 @@ ATLASCLOUD_API_KEY=...
 
 ```text
 .env.local
-phase0-tldraw-spike/.env.local
+coflow/.env.local
 ```
 
 API key를 commit하거나 채팅에 붙여넣지 마세요.
@@ -145,7 +145,7 @@ API key를 commit하거나 채팅에 붙여넣지 마세요.
 
 ## 개발 체크
 
-`phase0-tldraw-spike/`에서 실행:
+`coflow/`에서 실행:
 
 ```bash
 npm test
@@ -155,7 +155,7 @@ npm run build
 plugin manifest validation:
 
 ```bash
-python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py phase0-tldraw-spike
+python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py coflow
 ```
 
 ## 설계 원칙

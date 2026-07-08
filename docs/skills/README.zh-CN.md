@@ -2,7 +2,7 @@
 
 语言：[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-这份文档解释 CoFlow 面向用户的 skills。真正用于 Codex 执行的 skill 指令仍然在 `phase0-tldraw-spike/skills/*/SKILL.md`，那些文件是运行时 canonical instructions。
+这份文档解释 CoFlow 面向用户的 skills。真正用于 Codex 执行的 skill 指令仍然在 `coflow/skills/*/SKILL.md`，那些文件是运行时 canonical instructions。
 
 ## 核心心智模型
 

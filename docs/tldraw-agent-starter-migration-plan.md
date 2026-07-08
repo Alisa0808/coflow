@@ -4,7 +4,7 @@ Date: 2026-06-26
 
 ## Executive summary
 
-The official tldraw AI-enabled canvas / agent starter kit is much closer to our intended product shape than the current `phase0-tldraw-spike`.
+The official tldraw AI-enabled canvas / agent starter kit is much closer to our intended product shape than the current `coflow`.
 
 Our current spike proves several important project-specific ideas:
 
@@ -326,7 +326,7 @@ The acceptance test for this migration is not "the browser can call Atlas." It i
 Recommended target shape:
 
 ```text
-phase0-tldraw-spike/
+coflow/
   src/
     App.tsx
     media/
@@ -389,7 +389,7 @@ Acceptance:
 
 Goal:
 
-- add the official agent app/runtime concepts to `phase0-tldraw-spike`
+- add the official agent app/runtime concepts to `coflow`
 - keep native tldraw UI
 - keep our current asset store
 - do not add the official chat panel as the product entry

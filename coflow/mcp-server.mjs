@@ -615,7 +615,7 @@ async function handleLine(line) {
     return respond(id, {
       protocolVersion: '2024-11-05',
       capabilities: { tools: {} },
-      serverInfo: { name: 'phase0-tldraw-spike', version: '0.0.1' },
+      serverInfo: { name: 'coflow', version: '0.0.1' },
     })
   }
 
@@ -858,7 +858,7 @@ async function readLatestSelection() {
   } catch {
     return {
       updatedAt: null,
-      source: 'phase0-tldraw-spike',
+      source: 'coflow',
       selection: {
         version: 1,
         selectedIds: [],
@@ -930,7 +930,7 @@ async function captureLatestSelection(args) {
   const capture = {
     ok: true,
     updatedAt: new Date().toISOString(),
-    source: 'phase0-tldraw-spike',
+    source: 'coflow',
     captureType: 'selection',
     selection: latestSelection.selection,
   }
@@ -977,7 +977,7 @@ async function readLatestFrameContext() {
   } catch {
     return {
       updatedAt: null,
-      source: 'phase0-tldraw-spike',
+      source: 'coflow',
       context: null,
       warning: 'No frame context has been published yet. Select a frame and click Send to Codex in the canvas first.',
     }
@@ -990,7 +990,7 @@ async function readLatestCodexFrameRequest() {
   } catch {
     return {
       updatedAt: null,
-      source: 'phase0-tldraw-spike',
+      source: 'coflow',
       request: null,
       warning: 'No Codex frame request has been published yet. Select a frame and click Send to Codex in the canvas.',
     }
@@ -1009,7 +1009,7 @@ async function readLatestFrameInput() {
   } catch {
     return {
       updatedAt: null,
-      source: 'phase0-tldraw-spike',
+      source: 'coflow',
       frameInput: null,
       warning: 'No Frame Input artifact has been published yet. Select a frame and click Send to Codex in the canvas.',
     }
@@ -1032,7 +1032,7 @@ async function readLatestFrameScreenshot(includeBase64 = false) {
   } catch {
     return {
       updatedAt: null,
-      source: 'phase0-tldraw-spike',
+      source: 'coflow',
       screenshot: null,
       warning: 'No frame screenshot has been saved yet. Select a frame and click Send to Codex in the canvas.',
     }

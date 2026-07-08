@@ -74,7 +74,7 @@ This file stores onboarding state and default image/video provider/model intent.
 
 ### 3. Open-source quick start
 
-Added `phase0-tldraw-spike/README.md` covering:
+Added `coflow/README.md` covering:
 
 - local startup;
 - provider setup;

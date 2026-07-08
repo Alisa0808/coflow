@@ -59,20 +59,20 @@ CoFlow 处于 Phase 1 RC，重点是图片/视频生成和写回闭环。
 活跃插件和运行时在：
 
 ```text
-phase0-tldraw-spike/
+coflow/
 ```
 
 重要文件：
 
 ```text
-phase0-tldraw-spike/.codex-plugin/plugin.json  # Codex 插件 manifest
-phase0-tldraw-spike/.mcp.json                  # MCP server 配置
-phase0-tldraw-spike/mcp-server.mjs             # 面向 Codex 的 MCP 工具
-phase0-tldraw-spike/server.mjs                 # 本地画布服务
-phase0-tldraw-spike/src/                       # tldraw 画布应用
-phase0-tldraw-spike/skills/                    # CoFlow Codex skills
-phase0-tldraw-spike/lib/                       # provider/runtime helper
-phase0-tldraw-spike/tests/                     # 回归测试
+coflow/.codex-plugin/plugin.json  # Codex 插件 manifest
+coflow/.mcp.json                  # MCP server 配置
+coflow/mcp-server.mjs             # 面向 Codex 的 MCP 工具
+coflow/server.mjs                 # 本地画布服务
+coflow/src/                       # tldraw 画布应用
+coflow/skills/                    # CoFlow Codex skills
+coflow/lib/                       # provider/runtime helper
+coflow/tests/                     # 回归测试
 ```
 
 生成资产和本地运行状态存储在 `.coflow/`，该目录已被 git 忽略。
@@ -80,7 +80,7 @@ phase0-tldraw-spike/tests/                     # 回归测试
 ## 快速开始
 
 ```bash
-cd phase0-tldraw-spike
+cd coflow
 npm install
 npm run build
 npm run serve
@@ -92,7 +92,7 @@ npm run serve
 http://127.0.0.1:5176/
 ```
 
-插件开发时，可以让本地 personal marketplace 的 `~/plugins/coflow` 指向 `phase0-tldraw-spike`，然后安装：
+插件开发时，可以让本地 personal marketplace 的 `~/plugins/coflow` 指向 `coflow`，然后安装：
 
 ```bash
 codex plugin add coflow@personal
@@ -120,7 +120,7 @@ ATLASCLOUD_API_KEY=...
 
 ```text
 .env.local
-phase0-tldraw-spike/.env.local
+coflow/.env.local
 ```
 
 不要提交 API key，也不要把密钥粘贴到聊天里。
@@ -145,7 +145,7 @@ phase0-tldraw-spike/.env.local
 
 ## 开发检查
 
-在 `phase0-tldraw-spike/` 下运行：
+在 `coflow/` 下运行：
 
 ```bash
 npm test
@@ -155,7 +155,7 @@ npm run build
 插件 manifest 校验：
 
 ```bash
-python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py phase0-tldraw-spike
+python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py coflow
 ```
 
 ## 设计原则
