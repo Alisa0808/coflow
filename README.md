@@ -1,0 +1,169 @@
+# CoFlow
+
+CoFlow is an agent-native media canvas for Codex.
+
+It combines an infinite tldraw whiteboard with Codex skills and MCP tools so you can point at visual context, describe the change, generate a new image or video, and write the result back onto the canvas with local assets and version lineage.
+
+## What CoFlow Is
+
+CoFlow is not a provider form, a lightweight Canva clone, or a static image board.
+
+The canvas is the visual context surface:
+
+- select or frame source images and videos;
+- add arrows, boxes, notes, and spatial annotations;
+- let Codex read bounded canvas context through MCP;
+- generate through Codex native image tools or external providers;
+- write generated media back as native tldraw image/video objects;
+- preserve prompts, model/provider metadata, local paths, and lineage links.
+
+The core workflow is:
+
+```text
+select or frame media on canvas
+→ describe the edit/generation request in Codex
+→ CoFlow skills read bounded context
+→ Codex chooses the right generation route
+→ generated media is inserted back onto the canvas
+→ linked versions remain traceable
+```
+
+## Current Status
+
+CoFlow is in a Phase 1 RC state focused on the image/video writeback loop.
+
+Working today:
+
+- tldraw-based infinite canvas;
+- native image and video asset writeback;
+- prompt-only image generation writeback without accidental lineage links;
+- reference-based image/video workflow boundaries;
+- Atlas Cloud provider execution for supported external image/video models;
+- provider/model onboarding and status tools;
+- multi-page canvas persistence;
+- local `.coflow/` asset and metadata store;
+- Codex plugin manifest, skills, and MCP server.
+
+Not claimed yet:
+
+- full 3D canvas preview/editing;
+- hosted multi-user collaboration;
+- a polished consumer SaaS UI.
+
+## Repository Layout
+
+The active plugin/runtime lives in:
+
+```text
+phase0-tldraw-spike/
+```
+
+Important files:
+
+```text
+phase0-tldraw-spike/.codex-plugin/plugin.json  # Codex plugin manifest
+phase0-tldraw-spike/.mcp.json                  # MCP server config
+phase0-tldraw-spike/mcp-server.mjs             # Codex-facing MCP tools
+phase0-tldraw-spike/server.mjs                 # local canvas server
+phase0-tldraw-spike/src/                       # tldraw canvas app
+phase0-tldraw-spike/skills/                    # CoFlow Codex skills
+phase0-tldraw-spike/lib/                       # provider/runtime helpers
+phase0-tldraw-spike/tests/                     # regression tests
+```
+
+Generated assets and local runtime state are stored under `.coflow/` and are ignored by git.
+
+## Quick Start
+
+```bash
+cd phase0-tldraw-spike
+npm install
+npm run build
+npm run serve
+```
+
+Then open:
+
+```text
+http://127.0.0.1:5176/
+```
+
+For plugin development, the local personal marketplace can point `~/plugins/coflow` at `phase0-tldraw-spike`, then install with:
+
+```bash
+codex plugin add coflow@personal
+```
+
+After reinstalling a local plugin version, start a new Codex thread or restart Codex so new skills and MCP tools are picked up.
+
+## Provider Setup
+
+Default image behavior uses Codex built-in GPT Image 2 for image generation and image editing/reference work when available.
+
+Default video behavior uses Atlas Cloud Seedance 2.0 for text-to-video and reference/video editing routes.
+
+Create an Atlas Cloud API key with this invite link:
+
+[Atlas Cloud API keys](https://www.atlascloud.ai/console/api-keys?utm_source=coflow&ref=F27PTG)
+
+Then add the key to a local env file:
+
+```bash
+ATLASCLOUD_API_KEY=...
+```
+
+Supported local env file locations:
+
+```text
+.env.local
+phase0-tldraw-spike/.env.local
+```
+
+Do not commit API keys or paste secrets into chat.
+
+## Codex Skills
+
+Core plugin skills:
+
+- `coflow-open` opens the local canvas.
+- `coflow-provider-setup` reads or changes image/video provider defaults.
+- `coflow-model-list` summarizes configured model support.
+- `coflow-image` handles image generation and image editing from canvas context.
+- `coflow-video` handles text-to-video and reference/video revision workflows.
+
+Scenario skills:
+
+- `coflow-product-marketing`
+- `coflow-social-repurpose`
+- `coflow-video-ad-keyframes`
+- `coflow-style-exploration`
+- `coflow-3d`
+
+## Development Checks
+
+Run from `phase0-tldraw-spike/`:
+
+```bash
+npm test
+npm run build
+```
+
+Plugin manifest validation:
+
+```bash
+python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py phase0-tldraw-spike
+```
+
+## Design Principles
+
+- The canvas is visual context and writeback surface.
+- Codex owns intent understanding, skill routing, and provider orchestration.
+- Use native tldraw assets/shapes/bindings before inventing custom records.
+- Prompt-only generation should not create fake lineage links.
+- Reference-based generation should preserve source relationships.
+- Provider setup is not blanket upload permission; asset sharing is task-scoped.
+- Local-first storage should make generated media and metadata inspectable.
+
+## License
+
+MIT
