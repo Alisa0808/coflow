@@ -75,9 +75,23 @@ Minimum normalized result for writeback:
 
 ## Authorization behavior
 
-When the user invokes this video skill for a canvas task, treat that invocation as permission to use the current bounded canvas context for the requested generation/revision. Do not ask a second user-facing confirmation before calling `canvas.run_provider`.
+Opening the CoFlow canvas is not permission to upload canvas assets. Permission is task-scoped, not board-scoped.
 
-This skill may pass local source/reference assets from the current frame, selection, or viewport context to the selected provider. Keep that scope narrow: only use assets returned by the canvas context tool for this task.
+When all of the following are true, treat the user's invocation as consent for this generation task and do not ask a second chat-level confirmation before calling `canvas.run_provider`:
+
+- the user invoked this video skill, clicked `Send to Codex`, used Quick Edit, or otherwise asked Codex to generate/revise video from the current CoFlow canvas task;
+- the provider/model is selected by saved CoFlow provider settings or by the user's explicit request;
+- the local references come only from the current bounded task context returned by `canvas.get_frame_input`, `canvas.capture_selection`, or `canvas.get_selection`.
+
+For an external provider such as Atlas Cloud, that task-level consent includes sending the selected/current-frame local reference assets and normalized prompt to the selected provider for this one generation request.
+
+Keep the scope narrow:
+
+- use only source/reference assets returned by the canvas context tool for this task;
+- do not upload unrelated canvas assets;
+- do not scan or upload the whole board;
+- do not send API keys, local config files, or provider settings secrets;
+- do not change provider/model silently to avoid a confirmation.
 
 If the Codex platform itself blocks the tool call and asks for a security approval, stop for that platform approval. Do not add an extra explanatory consent prompt in the assistant message before the tool call.
 

@@ -395,13 +395,13 @@ export default function App() {
         const commands = await fetchPendingCommands('canvas.create_version', CANVAS_CLIENT_VERSION)
         for (const command of commands) {
           if (command.type === 'canvas.create_version') {
-            await placeVersionFromCommand(command)
+            await placeWritebackCommand(command, () => placeVersionFromCommand(command))
           }
         }
         const linkCommands = await fetchPendingCommands('canvas.link_versions', CANVAS_CLIENT_VERSION)
         for (const command of linkCommands) {
           if (command.type === 'canvas.link_versions') {
-            await placeVersionLinkFromCommand(command)
+            await placeWritebackCommand(command, () => placeVersionLinkFromCommand(command))
           }
         }
       } catch {
@@ -713,11 +713,40 @@ export default function App() {
     return { clipboardCopied, screenshot, error }
   }
 
+  async function placeWritebackCommand(command: CanvasCommand, placeCommand: () => Promise<void>) {
+    try {
+      await placeCommand()
+    } catch (error) {
+      await recordOperation({
+        type: 'codex.command_failed',
+        command,
+        error: errorToOperationRecord(error),
+      }).catch(() => undefined)
+      showStatus('Codex writeback failed before it could update the canvas. Check operations log for details.', 6400)
+    }
+  }
+
   async function placeVersionFromCommand(command: CanvasCommand) {
     const editor = editorRef.current
     if (!editor) return
 
     const shapes = toCanvasShapeRecords(editor, editor.getCurrentPageShapesSorted())
+    const src = command.src ?? srcFromLocalPath(command.localPath)
+    if (!src) {
+      await recordOperation({
+        type: 'codex.version_place_failed',
+        reason: 'missing_browser_readable_src',
+        command,
+      })
+      showStatus('Codex writeback skipped: command has no src or localPath.', 5200)
+      return
+    }
+
+    if (!commandHasReferenceInput(command)) {
+      await placeStandaloneMediaFromCommand(command, shapes, src)
+      return
+    }
+
     const sourceShape = command.sourceShapeId ? editor.getShape(command.sourceShapeId as TLShapeId) : undefined
     const frame = command.frameId ? shapes.find((shape) => shape.id === command.frameId && shape.type === 'frame') : findContextFrame(editor, shapes)
     const context = !sourceShape && frame ? await extractMaterializedFrameContext(editor, shapes, frame.id) : undefined
@@ -730,13 +759,12 @@ export default function App() {
       : frameAnchor
 
     if (!anchor) {
+      await recordOperation({
+        type: 'codex.version_place_failed',
+        reason: 'source_anchor_not_found',
+        command,
+      })
       showStatus('Codex writeback skipped: target source shape or frame media anchor not found.', 5200)
-      return
-    }
-
-    const src = command.src ?? srcFromLocalPath(command.localPath)
-    if (!src) {
-      showStatus('Codex writeback skipped: command has no src or localPath.', 5200)
       return
     }
 
@@ -851,6 +879,66 @@ export default function App() {
     await publishCurrentSelection(editor)
     setSelectedMediaInfo(getSelectedMediaInfo(editor))
     showStatus('Placed Codex generated version on canvas.', 3200)
+  }
+
+  async function placeStandaloneMediaFromCommand(command: CanvasCommand, shapes: CanvasShapeRecord[], src: string) {
+    const editor = editorRef.current
+    if (!editor) return
+
+    const childId = createShapeId()
+    const outputSize = getStandaloneGeneratedMediaOutputSize(command)
+    const bounds = getStandaloneMediaPlacementBounds(editor, shapes, command, outputSize)
+    const versionId = `media:codex-${Date.now()}`
+    const writebackCompletedAt = new Date().toISOString()
+    const e2eDurationMs = getDurationMs(command.e2eStartedAt, writebackCompletedAt)
+    const commandWithWritebackTiming: CanvasCommand = {
+      ...command,
+      writebackCompletedAt,
+      e2eCompletedAt: writebackCompletedAt,
+      e2eDurationMs,
+    }
+
+    const generated = createNativeGeneratedMediaRecords({
+      command: commandWithWritebackTiming,
+      childId,
+      parentId: editor.getCurrentPageId(),
+      bounds,
+      src,
+      versionId,
+    })
+
+    editor.run(() => {
+      editor.createAssets([generated.asset])
+      editor.createShapes([generated.shape])
+      editor.select(childId)
+    })
+
+    const createdChild = editor.getShape(childId)
+    const createdAsset = editor.getAsset(generated.asset.id)
+    if (!createdChild || !createdAsset) {
+      await recordOperation({
+        type: 'codex.media_place_failed',
+        reason: 'native_records_missing_after_create',
+        childShapeId: childId,
+        assetId: generated.asset.id,
+        hasChild: Boolean(createdChild),
+        hasAsset: Boolean(createdAsset),
+        command: commandWithWritebackTiming,
+      })
+      showStatus('Codex writeback failed: generated native media record was not created.', 6400)
+      return
+    }
+
+    await recordOperation({
+      type: 'codex.media_placed',
+      childShapeId: childId,
+      command: commandWithWritebackTiming,
+    })
+    await waitForRestoreSideEffects(editor, 2)
+    await persistCanvasDocument(editor)
+    await publishCurrentSelection(editor)
+    setSelectedMediaInfo(getSelectedMediaInfo(editor))
+    showStatus('Placed Codex generated media on canvas.', 3200)
   }
 
   async function placeVersionLinkFromCommand(command: CanvasCommand) {
@@ -1765,6 +1853,74 @@ function getGeneratedMediaOutputSize(command: CanvasCommand, anchorBounds: Bound
   }
 }
 
+function getStandaloneGeneratedMediaOutputSize(command: CanvasCommand): { w: number; h: number } {
+  const mediaType = getCommandMediaType(command)
+  const outputDimensions = getCommandOutputDimensions(command)
+  const defaultAspectRatio = mediaType === 'video' ? 16 / 9 : 1
+  const aspectRatio = outputDimensions ? outputDimensions.w / outputDimensions.h : defaultAspectRatio
+  const targetWidth = mediaType === 'video' ? 520 : 360
+  return {
+    w: targetWidth,
+    h: targetWidth / aspectRatio,
+  }
+}
+
+function getStandaloneMediaPlacementBounds(editor: Editor, shapes: CanvasShapeRecord[], command: CanvasCommand, outputSize: { w: number; h: number }): Bounds {
+  const frame = command.frameId ? editor.getShape(command.frameId as TLShapeId) : undefined
+  if (frame?.type === 'frame') {
+    const frameBounds = getShapePageBoundsRecord(editor, frame)
+    return createVersionPlacement(frameBounds, outputSize, getVersionPlacementOccupiedBounds(shapes, frame.id, frame.id)).childBounds
+  }
+
+  const viewport = editor.getViewportPageBounds()
+  const occupied = shapes.filter((shape) => shape.type !== 'frame').map(getShapeBounds)
+  const gap = 40
+  const initial = {
+    x: viewport.x + gap,
+    y: viewport.y + gap,
+    w: outputSize.w,
+    h: outputSize.h,
+  }
+
+  for (let row = 0; row < 6; row += 1) {
+    for (let column = 0; column < 6; column += 1) {
+      const candidate = {
+        ...initial,
+        x: initial.x + column * (outputSize.w + gap),
+        y: initial.y + row * (outputSize.h + gap),
+      }
+      if (!occupied.some((bounds) => boundsIntersect(candidate, inflateBoundsRecord(bounds, 24)))) return candidate
+    }
+  }
+
+  return initial
+}
+
+function inflateBoundsRecord(bounds: Bounds, padding: number): Bounds {
+  return {
+    x: bounds.x - padding,
+    y: bounds.y - padding,
+    w: bounds.w + padding * 2,
+    h: bounds.h + padding * 2,
+  }
+}
+
+function commandHasReferenceInput(command: CanvasCommand) {
+  if (command.sourceShapeId) return true
+  return (
+    command.references?.some((reference) =>
+      Boolean(
+        stringFromUnknown(reference.shapeId) ||
+          stringFromUnknown((reference as { sourceShapeId?: unknown }).sourceShapeId) ||
+          stringFromUnknown(reference.assetId) ||
+          stringFromUnknown(reference.localPath) ||
+          stringFromUnknown(reference.absolutePath) ||
+          stringFromUnknown(reference.src),
+      ),
+    ) ?? false
+  )
+}
+
 function getCommandOutputDimensions(command: CanvasCommand): { w: number; h: number } | undefined {
   const w = Number(command.outputWidth)
   const h = Number(command.outputHeight)
@@ -1873,6 +2029,19 @@ function compactRecord(input: Record<string, unknown>) {
     if (value !== undefined && value !== null && value !== '') output[key] = value
   }
   return output
+}
+
+function errorToOperationRecord(error: unknown) {
+  if (error instanceof Error) {
+    return compactRecord({
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    })
+  }
+  return {
+    message: String(error),
+  }
 }
 
 function getMediaMetadata(editor: Editor, shape: TLShape) {

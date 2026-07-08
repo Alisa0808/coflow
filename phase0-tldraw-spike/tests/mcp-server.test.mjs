@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-function createMcpClient(workspaceRoot) {
+function createMcpClient(workspaceRoot, env = {}) {
   const child = spawn('node', ['mcp-server.mjs'], {
     cwd: new URL('..', import.meta.url),
     env: {
@@ -15,6 +15,8 @@ function createMcpClient(workspaceRoot) {
       ATLAS_PROVIDER_API_KEY: '',
       REAL_PROVIDER_API_KEY: '',
       COFLOW_URL: 'http://127.0.0.1:1',
+      COFLOW_RUNTIME_TIMEOUT_MS: '100',
+      ...env,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -61,6 +63,30 @@ function createMcpClient(workspaceRoot) {
       child.kill()
     },
   }
+}
+
+function pngHeaderWithDimensions(width, height) {
+  const bytes = Buffer.alloc(24)
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0)
+  bytes.writeUInt32BE(13, 8)
+  bytes.write('IHDR', 12, 4, 'ascii')
+  bytes.writeUInt32BE(width, 16)
+  bytes.writeUInt32BE(height, 20)
+  return bytes
+}
+
+async function writeFakeFfprobe(binRoot, payload) {
+  await mkdir(binRoot, { recursive: true })
+  const ffprobePath = join(binRoot, 'ffprobe')
+  await writeFile(
+    ffprobePath,
+    `#!/bin/sh
+cat <<'JSON'
+${JSON.stringify(payload)}
+JSON
+`
+  )
+  await chmod(ffprobePath, 0o755)
 }
 
 test('MCP lists capture_selection, provider tools, and link_versions without direct generation/session tools', async () => {
@@ -349,6 +375,162 @@ test('run_provider redirects Codex native image reference tasks to a reference-c
   }
 })
 
+test('run_provider resolves references from the active canvas runtime when store roots differ', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const canvasWorkspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-canvas-'))
+  const canvasStoreRoot = join(canvasWorkspaceRoot, '.coflow')
+  const sourceLocalPath = '.coflow/assets/images/source.png'
+  const sourceAbsolutePath = join(canvasStoreRoot, 'assets', 'images', 'source.png')
+  await mkdir(join(canvasStoreRoot, 'assets', 'images'), { recursive: true })
+  await mkdir(join(canvasStoreRoot, 'metadata'), { recursive: true })
+  await writeFile(sourceAbsolutePath, Buffer.from('active runtime image fixture'))
+  await writeFile(
+    join(canvasStoreRoot, 'metadata', 'provider-settings.json'),
+    `${JSON.stringify(
+      {
+        version: 1,
+        status: 'configured',
+        video: {
+          provider: 'Atlas Cloud',
+          modelIntent: 'reference_to_video',
+          textModel: 'bytedance/seedance-2.0-mini/text-to-video',
+          referenceModel: 'bytedance/seedance-2.0-mini/reference-to-video',
+        },
+      },
+      null,
+      2
+    )}\n`
+  )
+
+  const client = createMcpClient(workspaceRoot, {
+    COFLOW_RUNTIME_JSON: JSON.stringify({
+      source: 'env',
+      version: 1,
+      workspaceRoot: canvasWorkspaceRoot,
+      storeRoot: canvasStoreRoot,
+      assetsRoot: join(canvasStoreRoot, 'assets'),
+      metadataRoot: join(canvasStoreRoot, 'metadata'),
+      commandsRoot: join(canvasStoreRoot, 'commands'),
+      pendingCommandsPath: join(canvasStoreRoot, 'commands', 'pending.jsonl'),
+      clientVersion: '2026-06-27-native-media-writeback-v1',
+    }),
+  })
+  try {
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.run_provider',
+      arguments: {
+        mediaType: 'video',
+        provider: 'Atlas Cloud',
+        generationMode: 'reference_to_video',
+        prompt: 'Animate the source image.',
+        references: [
+          {
+            mediaType: 'image',
+            role: 'source',
+            shapeId: 'shape:source',
+            localPath: sourceLocalPath,
+            absolutePath: sourceAbsolutePath,
+          },
+        ],
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, false)
+    assert.equal(payload.status, 'provider_not_configured')
+    assert.equal(payload.request.references.length, 1)
+    assert.equal(payload.request.references[0].shapeId, 'shape:source')
+    assert.equal(payload.request.references[0].localPath, sourceLocalPath)
+    assert.equal(payload.request.references[0].absolutePath, sourceAbsolutePath)
+    assert.equal(payload.request.model, 'bytedance/seedance-2.0-mini/reference-to-video')
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+    await rm(canvasWorkspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('run_provider rejects unsupported Atlas video model inputs before provider execution', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const imageDir = join(workspaceRoot, '.coflow', 'assets', 'images')
+  const sourceLocalPath = '.coflow/assets/images/source.png'
+  await mkdir(imageDir, { recursive: true })
+  await writeFile(join(imageDir, 'source.png'), Buffer.from('fake png fixture'))
+
+  const client = createMcpClient(workspaceRoot)
+  try {
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.run_provider',
+      arguments: {
+        mediaType: 'video',
+        provider: 'Atlas Cloud',
+        model: 'bytedance/seedance-2.0/text-to-video',
+        generationMode: 'reference_to_video',
+        prompt: 'Animate this image.',
+        references: [
+          {
+            mediaType: 'image',
+            role: 'source',
+            localPath: sourceLocalPath,
+          },
+        ],
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, false)
+    assert.equal(payload.status, 'model_preflight_failed')
+    assert.equal(payload.validation.code, 'unsupported_reference')
+    assert.match(payload.reason, /does not support image references/)
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('get_asset reads assets from the active canvas runtime when store roots differ', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const canvasWorkspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-canvas-'))
+  const canvasStoreRoot = join(canvasWorkspaceRoot, '.coflow')
+  const sourceLocalPath = '.coflow/assets/images/source.png'
+  const sourceAbsolutePath = join(canvasStoreRoot, 'assets', 'images', 'source.png')
+  await mkdir(join(canvasStoreRoot, 'assets', 'images'), { recursive: true })
+  await writeFile(sourceAbsolutePath, Buffer.from('active runtime image fixture'))
+
+  const client = createMcpClient(workspaceRoot, {
+    COFLOW_RUNTIME_JSON: JSON.stringify({
+      source: 'env',
+      version: 1,
+      workspaceRoot: canvasWorkspaceRoot,
+      storeRoot: canvasStoreRoot,
+      assetsRoot: join(canvasStoreRoot, 'assets'),
+      metadataRoot: join(canvasStoreRoot, 'metadata'),
+      commandsRoot: join(canvasStoreRoot, 'commands'),
+      pendingCommandsPath: join(canvasStoreRoot, 'commands', 'pending.jsonl'),
+      clientVersion: '2026-06-27-native-media-writeback-v1',
+    }),
+  })
+  try {
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.get_asset',
+      arguments: {
+        localPath: sourceLocalPath,
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.localPath, sourceLocalPath)
+    assert.equal(payload.absolutePath, sourceAbsolutePath)
+    assert.equal(payload.runtime.storeRoot, canvasStoreRoot)
+    assert.equal(payload.bytes, 28)
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+    await rm(canvasWorkspaceRoot, { recursive: true, force: true })
+  }
+})
+
 test('insert_media rejects writeback without generated media path', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
   const client = createMcpClient(workspaceRoot)
@@ -412,6 +594,240 @@ test('insert_media normalizes canvas.run_provider result before writeback', asyn
   } finally {
     await client.close()
     await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('insert_media infers image dimensions from generated file when provider result omits them', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const generatedPath = join(workspaceRoot, '.coflow', 'assets', 'images', 'generated-portrait.png')
+  const client = createMcpClient(workspaceRoot)
+  try {
+    await mkdir(join(workspaceRoot, '.coflow', 'assets', 'images'), { recursive: true })
+    await writeFile(generatedPath, pngHeaderWithDimensions(576, 1024))
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.insert_media',
+      arguments: {
+        providerResult: {
+          mediaType: 'image',
+          provider: 'Atlas Cloud',
+          model: 'openai/gpt-image-2/text-to-image',
+          prompt: 'Create a vertical poster.',
+          localPath: '.coflow/assets/images/generated-portrait.png',
+          absolutePath: generatedPath,
+        },
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.command.outputWidth, 576)
+    assert.equal(payload.command.outputHeight, 1024)
+
+    const pending = JSON.parse(await readFile(join(workspaceRoot, '.coflow', 'commands', 'pending.jsonl'), 'utf8'))
+    assert.equal(pending.outputWidth, 576)
+    assert.equal(pending.outputHeight, 1024)
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('insert_media infers video dimensions from generated file when provider result omits them', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const binRoot = await mkdtemp(join(tmpdir(), 'coflow-ffprobe-'))
+  const generatedPath = join(workspaceRoot, '.coflow', 'assets', 'videos', 'generated-vertical.mp4')
+  const client = createMcpClient(workspaceRoot, {
+    PATH: `${binRoot}:${process.env.PATH || ''}`,
+  })
+  try {
+    await writeFakeFfprobe(binRoot, {
+      streams: [
+        {
+          codec_type: 'video',
+          width: 720,
+          height: 1280,
+        },
+      ],
+    })
+    await mkdir(join(workspaceRoot, '.coflow', 'assets', 'videos'), { recursive: true })
+    await writeFile(generatedPath, 'fake-video')
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.insert_media',
+      arguments: {
+        providerResult: {
+          mediaType: 'video',
+          provider: 'Atlas Cloud',
+          model: 'bytedance/seedance-2-0-mini/txt2video',
+          prompt: 'Create a vertical product teaser.',
+          localPath: '.coflow/assets/videos/generated-vertical.mp4',
+          absolutePath: generatedPath,
+        },
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.command.outputWidth, 720)
+    assert.equal(payload.command.outputHeight, 1280)
+
+    const pending = JSON.parse(await readFile(join(workspaceRoot, '.coflow', 'commands', 'pending.jsonl'), 'utf8'))
+    assert.equal(pending.outputWidth, 720)
+    assert.equal(pending.outputHeight, 1280)
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+    await rm(binRoot, { recursive: true, force: true })
+  }
+})
+
+test('insert_media materializes external Codex image output before writeback', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const generatedRoot = await mkdtemp(join(tmpdir(), 'coflow-generated-'))
+  const generatedPath = join(generatedRoot, 'ig-sample.png')
+  const client = createMcpClient(workspaceRoot)
+  try {
+    await writeFile(generatedPath, 'fake-png')
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.insert_media',
+      arguments: {
+        mediaType: 'image',
+        src: generatedPath,
+        absolutePath: generatedPath,
+        provider: 'codex-native',
+        model: 'GPT image 2',
+        prompt: 'Make the cat open its mouth.',
+        outputWidth: 1086,
+        outputHeight: 1448,
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.command.mediaType, 'image')
+    assert.match(payload.command.localPath, /^\.coflow\/assets\/images\/ig-sample-\d+\.png$/)
+    assert.equal(payload.command.src, `/asset-store/${payload.command.localPath.slice('.coflow/'.length)}`)
+    assert.notEqual(payload.command.absolutePath, generatedPath)
+    assert.equal(await readFile(payload.command.absolutePath, 'utf8'), 'fake-png')
+
+    const pending = await readFile(join(workspaceRoot, '.coflow', 'commands', 'pending.jsonl'), 'utf8')
+    assert.match(pending, /\/asset-store\/assets\/images\/ig-sample-/)
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+    await rm(generatedRoot, { recursive: true, force: true })
+  }
+})
+
+test('insert_media prompt-only writeback does not infer the selected media as a source', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const client = createMcpClient(workspaceRoot)
+  try {
+    const metadataRoot = join(workspaceRoot, '.coflow', 'metadata')
+    await mkdir(metadataRoot, { recursive: true })
+    await writeFile(
+      join(metadataRoot, 'latest-selection.json'),
+      JSON.stringify({
+        updatedAt: '2026-07-07T00:00:00.000Z',
+        source: 'test',
+        selection: {
+          version: 1,
+          selectedIds: ['shape:cat'],
+          selectedItems: [
+            {
+              id: 'shape:cat',
+              kind: 'media',
+              asset: {
+                mediaType: 'image',
+              },
+            },
+          ],
+          updatedAt: '2026-07-07T00:00:00.000Z',
+        },
+      }),
+    )
+
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.insert_media',
+      arguments: {
+        mediaType: 'image',
+        localPath: '.coflow/assets/images/generated-prompt-only.png',
+        provider: 'Atlas Cloud',
+        model: 'openai/gpt-image-2/text-to-image',
+        prompt: 'Create a standalone fashion portrait.',
+        references: [],
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.command.type, 'canvas.create_version')
+    assert.equal(payload.command.requestedTool, 'canvas.insert_media')
+    assert.equal(payload.command.sourceShapeId, undefined)
+    assert.equal(payload.command.frameId, undefined)
+    assert.deepEqual(payload.command.references, [])
+    assert.match(payload.note, /standalone canvas writeback/)
+
+    const pending = await readFile(join(workspaceRoot, '.coflow', 'commands', 'pending.jsonl'), 'utf8')
+    assert.equal(pending.includes('shape:cat'), false)
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('insert_media writes back through the active canvas server runtime when store roots differ', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-mcp-'))
+  const canvasWorkspaceRoot = await mkdtemp(join(tmpdir(), 'coflow-canvas-'))
+  const generatedRoot = await mkdtemp(join(tmpdir(), 'coflow-generated-'))
+  const generatedPath = join(generatedRoot, 'ig-runtime.png')
+  const canvasStoreRoot = join(canvasWorkspaceRoot, '.coflow')
+  const client = createMcpClient(workspaceRoot, {
+    COFLOW_RUNTIME_JSON: JSON.stringify({
+      source: 'env',
+      version: 1,
+      workspaceRoot: canvasWorkspaceRoot,
+      storeRoot: canvasStoreRoot,
+      assetsRoot: join(canvasStoreRoot, 'assets'),
+      commandsRoot: join(canvasStoreRoot, 'commands'),
+      pendingCommandsPath: join(canvasStoreRoot, 'commands', 'pending.jsonl'),
+      clientVersion: '2026-06-27-native-media-writeback-v1',
+    }),
+  })
+  try {
+    await writeFile(generatedPath, 'runtime-png')
+    await client.call('initialize')
+    const response = await client.call('tools/call', {
+      name: 'canvas.insert_media',
+      arguments: {
+        mediaType: 'image',
+        src: generatedPath,
+        absolutePath: generatedPath,
+        provider: 'codex-native',
+        model: 'GPT image 2',
+        prompt: 'Put this generated image back on the board.',
+        sourceShapeId: 'shape:source',
+      },
+    })
+    const payload = JSON.parse(response.result.content[0].text)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.queuedVia, 'runtime-file')
+    assert.equal(payload.runtime.storeRoot, canvasStoreRoot)
+    assert.equal(payload.command.sourceShapeId, 'shape:source')
+    assert.match(payload.command.localPath, /^\.coflow\/assets\/images\/ig-runtime-\d+\.png$/)
+    assert.equal(await readFile(payload.command.absolutePath, 'utf8'), 'runtime-png')
+
+    await assert.rejects(
+      readFile(join(workspaceRoot, '.coflow', 'commands', 'pending.jsonl'), 'utf8'),
+      /ENOENT/
+    )
+    const pending = await readFile(join(canvasStoreRoot, 'commands', 'pending.jsonl'), 'utf8')
+    assert.match(pending, /ig-runtime-\d+\.png/)
+    assert.match(pending, /shape:source/)
+  } finally {
+    await client.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+    await rm(canvasWorkspaceRoot, { recursive: true, force: true })
+    await rm(generatedRoot, { recursive: true, force: true })
   }
 })
 

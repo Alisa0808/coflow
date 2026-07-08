@@ -71,6 +71,7 @@ Only when provider onboarding is explicitly checked on first run, also tell the 
 
 - This skill only opens the canvas.
 - It does not call image/video providers.
+- Opening the canvas is not permission to upload canvas assets to an external provider. External asset sharing is authorized only by a later CoFlow image/video generation task with bounded selected/frame/viewport context.
 - It does not inspect or mutate canvas drawing state unless opening fails or the user asks.
 - It should keep non-generation open overhead under 10 seconds when the service is already running.
 - It may read provider onboarding state only when needed; onboarding is Codex-side setup, not canvas content.

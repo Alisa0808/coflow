@@ -23,8 +23,8 @@ export function buildProviderOnboarding({ providerSettings, providerStatus, sett
     settingsPath,
     imageDefault,
     videoDefault,
-    userMessage: buildUserMessage({ status, atlasConnected }),
-    actions: buildActions({ status, imageDefault, videoDefault, providerSkillName }),
+    userMessage: buildUserMessage({ status, atlasConnected, imageDefault, videoDefault }),
+    actions: buildActions({ status, imageDefault, videoDefault, providerSkillName, atlasConnected }),
     providerSkillName,
   }
 }
@@ -58,14 +58,16 @@ function summarizeVideoDefault(providerSettings, providerStatus) {
   }
 }
 
-function buildActions({ status, imageDefault, videoDefault, providerSkillName }) {
+function buildActions({ status, imageDefault, videoDefault, providerSkillName, atlasConnected }) {
   const keepDefaultsAndSetupAtlas = {
-    id: 'keep_defaults_setup_atlas_cloud',
-    label: 'Keep defaults and set up Atlas Cloud',
-    description: 'Use Codex built-in GPT Image 2 for images and Atlas Cloud Seedance 2.0 for videos, then check whether the Atlas Cloud API key is connected.',
+    id: atlasConnected ? 'keep_connected_defaults' : 'keep_defaults_setup_atlas_cloud',
+    label: atlasConnected ? 'Keep connected defaults' : 'Keep defaults and set up Atlas Cloud',
+    description: atlasConnected
+      ? 'Use Codex built-in GPT Image 2 for images and Atlas Cloud Seedance 2.0 for videos. Atlas Cloud is already connected.'
+      : 'Use Codex built-in GPT Image 2 for images and Atlas Cloud Seedance 2.0 for videos, then check whether the Atlas Cloud API key is connected.',
     toolName: 'canvas.set_provider_settings',
-    nextStep: 'check_atlas_cloud_key',
-    requiresProviderCredentialCheck: true,
+    nextStep: atlasConnected ? 'ready' : 'check_atlas_cloud_key',
+    requiresProviderCredentialCheck: !atlasConnected,
     arguments: {
       status: 'configured',
       image: imageDefault,
@@ -99,23 +101,30 @@ function buildActions({ status, imageDefault, videoDefault, providerSkillName })
   return [keepDefaultsAndSetupAtlas, customize, skipForNow]
 }
 
-function buildUserMessage({ status, atlasConnected }) {
+function buildUserMessage({ status, atlasConnected, imageDefault, videoDefault }) {
+  const imageLines = imageDefaultMessageLines(imageDefault)
+  const videoLines = videoDefaultMessageLines(videoDefault)
+  const atlasUsage = atlasUsageLabel({ imageDefault, videoDefault })
   if (status === 'configured') {
     if (atlasConnected) {
-      return 'Atlas Cloud is connected. CoFlow can now generate images with Codex built-in GPT Image 2 and videos with Atlas Cloud Seedance 2.0.'
+      return [
+        'Atlas Cloud is connected.',
+        '',
+        'Current defaults:',
+        ...imageLines,
+        ...videoLines,
+      ].join('\n')
     }
     return [
       'CoFlow defaults are saved, but Atlas Cloud is not connected yet.',
       '',
       'Current defaults:',
-      '- Image generation: Codex built-in GPT Image 2',
-      '- Image editing: Codex built-in GPT Image 2',
-      '- Text-to-video: Atlas Cloud Seedance 2.0',
-      '- Reference/video editing: Atlas Cloud Seedance 2.0',
+      ...imageLines,
+      ...videoLines,
       '',
       'Connection status:',
       '- Codex built-in image model: Ready',
-      '- Atlas Cloud: Needs API key',
+      `- Atlas Cloud: Needs API key for ${atlasUsage}`,
       '',
       'Create an Atlas Cloud API key here:',
       'https://www.atlascloud.ai/console/api-keys?utm_source=coflow&ref=F27PTG',
@@ -127,14 +136,65 @@ function buildUserMessage({ status, atlasConnected }) {
   if (status === 'skipped') {
     return 'You can use Codex built-in GPT Image 2 for image tasks. Video generation and Atlas Cloud models will require setup later.'
   }
+  if (atlasConnected) {
+    return [
+      'CoFlow is ready to use with these defaults:',
+      '',
+      '- Image generation and editing: Codex built-in GPT Image 2',
+      '- Video generation and video editing: Atlas Cloud Seedance 2.0',
+      '',
+      'Connection status:',
+      '- Codex built-in image model: Ready',
+      '- Atlas Cloud: Connected',
+      '',
+      'Keep these defaults to save them, or customize providers and models.',
+    ].join('\n')
+  }
   return [
     'CoFlow is ready to use with these defaults:',
     '',
-    '- Image generation and image editing: Codex built-in GPT Image 2',
+    '- Image generation and editing: Codex built-in GPT Image 2',
     '- Video generation and video editing: Atlas Cloud Seedance 2.0',
     '',
     'To use the default video workflow, connect your Atlas Cloud API key.',
   ].join('\n')
+}
+
+function imageDefaultMessageLines(imageDefault) {
+  const provider = canonicalProviderId(imageDefault?.provider || 'codex-native')
+  if (provider === 'Atlas Cloud') {
+    return [
+      '- Image generation: Atlas Cloud image model',
+      '- Image editing and local-reference edits: Atlas Cloud image model',
+    ]
+  }
+  return [
+    '- Image generation: Codex built-in GPT Image 2',
+    '- Image editing and local-reference edits: Codex built-in GPT Image 2',
+  ]
+}
+
+function videoDefaultMessageLines(videoDefault) {
+  const provider = canonicalProviderId(videoDefault?.provider || 'Atlas Cloud')
+  if (provider === 'Atlas Cloud') {
+    return [
+      '- Text-to-video: Atlas Cloud Seedance 2.0',
+      '- Reference/video editing: Atlas Cloud Seedance 2.0',
+    ]
+  }
+  return [
+    `- Text-to-video: ${provider}`,
+    `- Reference/video editing: ${provider}`,
+  ]
+}
+
+function atlasUsageLabel({ imageDefault, videoDefault }) {
+  const imageUsesAtlas = canonicalProviderId(imageDefault?.provider) === 'Atlas Cloud'
+  const videoUsesAtlas = canonicalProviderId(videoDefault?.provider || 'Atlas Cloud') === 'Atlas Cloud'
+  if (imageUsesAtlas && videoUsesAtlas) return 'image and video generation/editing'
+  if (imageUsesAtlas) return 'image generation/editing'
+  if (videoUsesAtlas) return 'video generation/editing'
+  return 'selected Atlas Cloud models'
 }
 
 function providerLabel(provider) {

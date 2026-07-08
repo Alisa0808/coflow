@@ -1,12 +1,17 @@
-import { appendFile, cp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { dirname, extname, join, normalize } from 'node:path'
+import { constants } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { appendFile, copyFile, cp, link, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, isAbsolute, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { getProviderStatus } from './lib/provider-config.mjs'
 import { prepareProviderExecution } from './lib/provider-executor.mjs'
 import { buildProviderOnboarding } from './lib/provider-onboarding.mjs'
-import { readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
+import { getDefaultProviderForMedia, readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
+import { validateAtlasVideoRequest } from './lib/atlas-video-models.mjs'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
+const execFileAsync = promisify(execFile)
 const workspaceRoot = process.env.WORKSPACE_ROOT || join(root, '..')
 const STORE_DIR = '.coflow'
 const LEGACY_STORE_DIR = `.${['codex', 'media', 'canvas'].join('-')}`
@@ -26,6 +31,7 @@ const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
 const latestExecutionResultPath = join(metadataRoot, 'latest-execution-result.json')
 const CANVAS_CLIENT_VERSION = '2026-06-27-native-media-writeback-v1'
 const CANVAS_SERVER_URL = process.env.COFLOW_URL || 'http://127.0.0.1:5176'
+const CANVAS_RUNTIME_TIMEOUT_MS = Number(process.env.COFLOW_RUNTIME_TIMEOUT_MS || 500)
 const FRESH_SELECTION_TIMEOUT_MS = 4500
 const FRESH_SELECTION_POLL_MS = 180
 
@@ -1034,8 +1040,10 @@ async function readLatestFrameScreenshot(includeBase64 = false) {
 }
 
 async function readCanvasAsset(args) {
-  const absolutePath = resolveReadableCanvasAssetPath(args.absolutePath, args.localPath)
-  if (!absolutePath) {
+  const activeRuntime = await readActiveCanvasRuntime()
+  const targetRuntime = activeRuntime || createLocalCanvasRuntime()
+  const asset = await resolveReadableCanvasAsset(args.absolutePath, args.localPath, targetRuntime)
+  if (!asset?.absolutePath) {
     return {
       ok: false,
       error: 'Provide absolutePath or .coflow localPath.',
@@ -1043,18 +1051,19 @@ async function readCanvasAsset(args) {
   }
 
   try {
-    const info = await stat(absolutePath)
+    const info = await stat(asset.absolutePath)
     return {
       ok: true,
-      absolutePath,
-      localPath: toCanvasLocalPath(absolutePath),
+      absolutePath: asset.absolutePath,
+      localPath: asset.localPath,
+      runtime: runtimeDebugInfo(asset.runtime),
       bytes: info.size,
       updatedAt: info.mtime.toISOString(),
     }
   } catch (error) {
     return {
       ok: false,
-      absolutePath,
+      absolutePath: asset.absolutePath,
       error: error instanceof Error ? error.message : String(error),
     }
   }
@@ -1083,24 +1092,39 @@ async function runProviderForMedia(args = {}) {
     }
   }
 
-  const references = normalizeProviderReferences(args.references)
-  const requestedProvider = canonicalProviderId(args.provider || defaultProviderForProviderRun(mediaType, references))
+  const activeRuntime = await readActiveCanvasRuntime()
+  const targetRuntime = activeRuntime || createLocalCanvasRuntime()
+  const references = await normalizeProviderReferences(args.references, targetRuntime)
+  const providerSettings = await readProviderSettings(readJsonFile, runtimeProviderSettingsPath(targetRuntime), process.env)
+  const generationMode =
+    typeof args.generationMode === 'string' && args.generationMode
+      ? args.generationMode
+      : inferProviderGenerationMode(mediaType, references)
+  const requestedProvider = canonicalProviderId(
+    args.provider || getDefaultProviderForMedia(providerSettings, mediaType) || defaultProviderForProviderRun(mediaType, references)
+  )
   const providerRedirect = providerRunRedirectForReferences({
     mediaType,
     provider: requestedProvider,
     references,
   })
   const provider = providerRedirect?.to || requestedProvider
+  const model =
+    typeof args.model === 'string' && args.model
+      ? args.model
+      : defaultModelForProviderRun({
+          mediaType,
+          generationMode,
+          provider,
+          providerSettings,
+        })
   const request = {
     id: `provider-request:${Date.now()}:${Math.random().toString(36).slice(2)}`,
     provider,
     providerRedirect,
-    model: typeof args.model === 'string' && args.model ? args.model : undefined,
+    model,
     providerOptions: normalizeProviderOptions(args.providerOptions),
-    generationMode:
-      typeof args.generationMode === 'string' && args.generationMode
-        ? args.generationMode
-        : inferProviderGenerationMode(mediaType, references),
+    generationMode,
     instructions: {
       prompt,
     },
@@ -1112,6 +1136,18 @@ async function runProviderForMedia(args = {}) {
           ? args.outputLocalPath
           : `.coflow/assets/${mediaType === 'video' ? 'videos' : 'images'}/generated-${Date.now()}.${mediaType === 'video' ? 'mp4' : 'png'}`,
     },
+  }
+
+  const preflight = validateProviderRunRequest(request)
+  if (!preflight.ok) {
+    return {
+      ok: false,
+      status: 'model_preflight_failed',
+      provider,
+      request,
+      reason: preflight.reason,
+      validation: preflight,
+    }
   }
 
   const execution = await prepareProviderExecution(request, process.env)
@@ -1165,6 +1201,7 @@ async function runProviderForMedia(args = {}) {
   const materialized = await materializeProviderOutput({
     externalExecution,
     mediaType,
+    runtime: targetRuntime,
   })
   if (!materialized.ok) {
     return {
@@ -1197,10 +1234,13 @@ async function runProviderForMedia(args = {}) {
     generationDurationMs: externalExecution?.timings?.totalDurationMs,
     providerTimings: externalExecution?.timings,
     providerExecution: redactProviderExecution(externalExecution),
+    runtime: runtimeDebugInfo(targetRuntime),
   }
 
-  await writeJson(join(executionsRoot, `${sanitizeFilePart(result.id)}.json`), result)
-  await writeJson(latestExecutionResultPath, {
+  const targetMetadataRoot = runtimeMetadataRoot(targetRuntime)
+  const targetExecutionsRoot = runtimeExecutionsRoot(targetRuntime)
+  await writeJson(join(targetExecutionsRoot, `${sanitizeFilePart(result.id)}.json`), result)
+  await writeJson(join(targetMetadataRoot, 'latest-execution-result.json'), {
     updatedAt: new Date().toISOString(),
     source: 'mcp.canvas.run_provider',
     result,
@@ -1209,22 +1249,24 @@ async function runProviderForMedia(args = {}) {
   return result
 }
 
-function normalizeProviderReferences(references) {
+async function normalizeProviderReferences(references, runtime = createLocalCanvasRuntime()) {
   if (!Array.isArray(references)) return []
-  return references
-    .map((reference) => {
-      if (!reference || typeof reference !== 'object') return null
-      const absolutePath = resolveReadableCanvasAssetPath(reference.absolutePath, reference.localPath)
-      if (!absolutePath) return null
-      return {
-        mediaType: reference.mediaType === 'video' ? 'video' : reference.mediaType === 'audio' ? 'audio' : 'image',
-        role: typeof reference.role === 'string' && reference.role ? reference.role : 'reference',
-        localPath: toCanvasLocalPath(absolutePath),
-        absolutePath,
-        bounds: reference.bounds,
-      }
+  const normalized = []
+  for (const reference of references) {
+    if (!reference || typeof reference !== 'object') continue
+    const asset = await resolveReadableCanvasAsset(reference.absolutePath, reference.localPath, runtime)
+    if (!asset?.absolutePath) continue
+    normalized.push({
+      mediaType: reference.mediaType === 'video' ? 'video' : reference.mediaType === 'audio' ? 'audio' : 'image',
+      role: typeof reference.role === 'string' && reference.role ? reference.role : 'reference',
+      shapeId: firstString(reference.shapeId, reference.sourceShapeId),
+      assetId: firstString(reference.assetId),
+      localPath: asset.localPath,
+      absolutePath: asset.absolutePath,
+      bounds: reference.bounds,
     })
-    .filter(Boolean)
+  }
+  return normalized
 }
 
 function normalizeProviderOptions(options) {
@@ -1242,6 +1284,34 @@ function normalizeProviderOptions(options) {
 function defaultProviderForProviderRun(mediaType, references) {
   if (mediaType === 'video') return 'Atlas Cloud'
   return references.length > 0 ? 'Atlas Cloud' : 'codex-native'
+}
+
+function defaultModelForProviderRun({ mediaType, generationMode, provider, providerSettings }) {
+  if (!providerSettings || !provider) return undefined
+
+  const mediaSettings = mediaType === 'video' ? providerSettings.video : providerSettings.image
+  if (canonicalProviderId(mediaSettings?.provider) !== canonicalProviderId(provider)) return undefined
+
+  if (mediaType === 'video') {
+    if (generationMode === 'text_to_video') return mediaSettings.textModel
+    return mediaSettings.referenceModel || mediaSettings.textModel
+  }
+
+  if (generationMode === 'text_to_image') return mediaSettings.textModel
+  return mediaSettings.editModel || mediaSettings.textModel
+}
+
+function validateProviderRunRequest(request) {
+  const mediaType = request?.output?.mediaType === 'video' ? 'video' : 'image'
+  if (canonicalProviderId(request?.provider) !== 'Atlas Cloud' || mediaType !== 'video') {
+    return { ok: true }
+  }
+
+  return validateAtlasVideoRequest({
+    model: request.model,
+    references: request.references,
+    providerOptions: request.providerOptions,
+  })
 }
 
 function providerRunRedirectForReferences({ mediaType, provider, references }) {
@@ -1262,7 +1332,7 @@ function inferProviderGenerationMode(mediaType, references) {
   return references.length > 0 ? 'image_edit' : 'text_to_image'
 }
 
-async function materializeProviderOutput({ externalExecution, mediaType }) {
+async function materializeProviderOutput({ externalExecution, mediaType, runtime = createLocalCanvasRuntime() }) {
   const outputUrl = externalExecution?.outputUrl || externalExecution?.outputs?.[0]
   if (!outputUrl) {
     return {
@@ -1284,11 +1354,14 @@ async function materializeProviderOutput({ externalExecution, mediaType }) {
   const group = mediaType === 'video' ? 'videos' : 'images'
   const fileName = `provider-output-${Date.now()}.${extension}`
   const localPath = `.coflow/assets/${group}/${fileName}`
-  const absolutePath = join(assetsRoot, group, fileName)
+  const targetAssetsRoot = runtimeAssetsRoot(runtime)
+  const absolutePath = join(targetAssetsRoot, group, fileName)
   const bytes = Buffer.from(await response.arrayBuffer())
+  const byteDimensions = inferMediaDimensionsFromBytes(bytes, mediaType, outputUrl)
 
-  await mkdir(join(assetsRoot, group), { recursive: true })
+  await mkdir(join(targetAssetsRoot, group), { recursive: true })
   await writeFile(absolutePath, bytes)
+  const dimensions = byteDimensions || (await inferMediaDimensionsFromFile(absolutePath, mediaType))
 
   return {
     ok: true,
@@ -1297,6 +1370,8 @@ async function materializeProviderOutput({ externalExecution, mediaType }) {
     src: `/asset-store/assets/${group}/${fileName}`,
     contentType: contentTypeHeader,
     bytes: bytes.length,
+    width: dimensions?.width,
+    height: dimensions?.height,
   }
 }
 
@@ -1343,32 +1418,121 @@ function redactProviderExecution(execution) {
   }
 }
 
-function resolveReadableCanvasAssetPath(absolutePath, localPath) {
-  if (typeof localPath === 'string' && localPath.startsWith(`${STORE_DIR}/`)) {
-    const normalized = normalize(join(workspaceRoot, localPath))
-    if (normalized.startsWith(storeRoot)) return normalized
-    return undefined
+function createLocalCanvasRuntime() {
+  return {
+    source: 'local-mcp',
+    root,
+    workspaceRoot: normalize(workspaceRoot),
+    storeDir: STORE_DIR,
+    storeRoot: normalize(storeRoot),
+    legacyStoreRoot: normalize(legacyStoreRoot),
+    metadataRoot: normalize(metadataRoot),
+    assetsRoot: normalize(assetsRoot),
+    commandsRoot: normalize(commandsRoot),
+    pendingCommandsPath: normalize(pendingCommandsPath),
+    clientVersion: CANVAS_CLIENT_VERSION,
   }
-  if (typeof localPath === 'string' && localPath.startsWith(`${LEGACY_STORE_DIR}/`)) {
-    const normalized = normalize(join(workspaceRoot, localPath))
-    if (normalized.startsWith(legacyStoreRoot)) return normalized
-    return undefined
-  }
+}
 
-  if (typeof absolutePath === 'string') {
-    const normalized = normalize(absolutePath)
-    if (normalized.startsWith(storeRoot)) return normalized
-    if (normalized.startsWith(legacyStoreRoot)) return normalized
+function runtimeMetadataRoot(runtime = createLocalCanvasRuntime()) {
+  return runtime?.metadataRoot || join(runtime?.storeRoot || storeRoot, 'metadata')
+}
+
+function runtimeProviderSettingsPath(runtime = createLocalCanvasRuntime()) {
+  return join(runtimeMetadataRoot(runtime), 'provider-settings.json')
+}
+
+function runtimeAssetsRoot(runtime = createLocalCanvasRuntime()) {
+  return runtime?.assetsRoot || join(runtime?.storeRoot || storeRoot, 'assets')
+}
+
+function runtimeExecutionsRoot(runtime = createLocalCanvasRuntime()) {
+  return join(runtime?.storeRoot || storeRoot, 'executions')
+}
+
+function runtimeDebugInfo(runtime = createLocalCanvasRuntime()) {
+  return {
+    source: runtime?.source || 'local-mcp',
+    storeRoot: runtime?.storeRoot || storeRoot,
+    assetsRoot: runtimeAssetsRoot(runtime),
+    metadataRoot: runtimeMetadataRoot(runtime),
+  }
+}
+
+function isPathInside(childPath, parentPath) {
+  if (typeof childPath !== 'string' || typeof parentPath !== 'string' || !childPath || !parentPath) return false
+  const child = normalize(childPath)
+  const parent = normalize(parentPath)
+  return child === parent || child.startsWith(`${parent}/`)
+}
+
+function absolutePathFromCanvasLocalPath(localPath, runtime = createLocalCanvasRuntime()) {
+  if (typeof localPath !== 'string' || localPath.length === 0) return undefined
+  if (localPath.startsWith(`${STORE_DIR}/`)) return normalize(join(runtime.storeRoot, localPath.slice(`${STORE_DIR}/`.length)))
+  if (localPath.startsWith(`${LEGACY_STORE_DIR}/`)) {
+    const targetLegacyRoot = runtime.legacyStoreRoot || legacyStoreRoot
+    return normalize(join(targetLegacyRoot, localPath.slice(`${LEGACY_STORE_DIR}/`.length)))
+  }
+  return undefined
+}
+
+async function resolveReadableCanvasAsset(absolutePath, localPath, runtime = createLocalCanvasRuntime()) {
+  const candidateRuntimes = canvasAssetCandidateRuntimes(runtime)
+  const normalizedAbsolute = typeof absolutePath === 'string' && absolutePath.length > 0 ? normalize(absolutePath) : undefined
+
+  for (const candidateRuntime of candidateRuntimes) {
+    const absoluteAsset = await resolveAbsoluteCanvasAsset(normalizedAbsolute, candidateRuntime)
+    if (absoluteAsset) return absoluteAsset
+
+    const localAsset = await resolveLocalCanvasAsset(localPath, candidateRuntime)
+    if (localAsset) return localAsset
   }
 
   return undefined
 }
 
-function toCanvasLocalPath(absolutePath) {
+function canvasAssetCandidateRuntimes(runtime = createLocalCanvasRuntime()) {
+  const candidates = []
+  const seen = new Set()
+  for (const candidate of [runtime, createLocalCanvasRuntime()]) {
+    if (!candidate?.storeRoot) continue
+    const key = `${normalize(candidate.storeRoot)}::${normalize(candidate.legacyStoreRoot || '')}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    candidates.push(candidate)
+  }
+  return candidates
+}
+
+async function resolveAbsoluteCanvasAsset(normalizedAbsolute, runtime) {
+  if (!normalizedAbsolute) return undefined
+  if (!isPathInside(normalizedAbsolute, runtime.storeRoot) && !isPathInside(normalizedAbsolute, runtime.legacyStoreRoot || legacyStoreRoot)) {
+    return undefined
+  }
+  if (!(await exists(normalizedAbsolute))) return undefined
+  return {
+    absolutePath: normalizedAbsolute,
+    localPath: toCanvasLocalPath(normalizedAbsolute, runtime),
+    runtime,
+  }
+}
+
+async function resolveLocalCanvasAsset(localPath, runtime) {
+  const absolutePath = absolutePathFromCanvasLocalPath(localPath, runtime)
+  if (!absolutePath || !(await exists(absolutePath))) return undefined
+  return {
+    absolutePath,
+    localPath: toCanvasLocalPath(absolutePath, runtime),
+    runtime,
+  }
+}
+
+function toCanvasLocalPath(absolutePath, runtime = createLocalCanvasRuntime()) {
   if (typeof absolutePath !== 'string' || absolutePath.length === 0) return undefined
   const normalized = normalize(absolutePath)
-  if (normalized.startsWith(storeRoot)) return `${STORE_DIR}${normalized.slice(storeRoot.length)}`
-  if (normalized.startsWith(legacyStoreRoot)) return `${STORE_DIR}${normalized.slice(legacyStoreRoot.length)}`
+  if (isPathInside(normalized, runtime.storeRoot)) return `${STORE_DIR}${normalized.slice(runtime.storeRoot.length)}`
+  const targetLegacyRoot = runtime.legacyStoreRoot || legacyStoreRoot
+  if (isPathInside(normalized, targetLegacyRoot)) return `${STORE_DIR}${normalized.slice(targetLegacyRoot.length)}`
   return undefined
 }
 
@@ -1437,7 +1601,7 @@ function normalizeWritebackArgs(args = {}) {
   }
 }
 
-function validateWritebackCommandArgs(args, toolName) {
+function validateWritebackCommandArgs(args, toolName, runtime = createLocalCanvasRuntime()) {
   if (toolName !== 'canvas.create_version' && toolName !== 'canvas.insert_media') return undefined
   if (!args.mediaType) {
     return {
@@ -1451,7 +1615,7 @@ function validateWritebackCommandArgs(args, toolName) {
       error: `${toolName} requires generated media src/localPath/absolutePath. Pass the top-level result returned by canvas.run_provider, or pass its src/localPath fields explicitly.`,
     }
   }
-  if (!args.src && !srcFromCanvasLocalPath(args.localPath) && !toCanvasLocalPath(args.absolutePath)) {
+  if (!srcIsBrowserReadable(args.src) && !srcFromCanvasLocalPath(args.localPath) && !toCanvasLocalPath(args.absolutePath, runtime)) {
     return {
       ok: false,
       error: `${toolName} could not convert the generated media path into a browser-readable .coflow asset URL.`,
@@ -1475,19 +1639,413 @@ async function migrateLegacyStore() {
   await cp(legacyStoreRoot, storeRoot, { recursive: true, force: false, errorOnExist: false })
 }
 
+async function materializeExternalWritebackAsset(args, runtime = createLocalCanvasRuntime()) {
+  const existingLocalPath = firstString(toCanvasLocalPath(args.absolutePath, runtime), args.localPath, localPathFromCanvasSrc(args.src))
+  const existingAbsolutePath = existingLocalPath ? absolutePathFromCanvasLocalPath(existingLocalPath, runtime) : undefined
+  if (existingLocalPath && existingAbsolutePath && (await exists(existingAbsolutePath))) {
+    const mediaType = args.mediaType || inferMediaTypeFromPath(existingAbsolutePath)
+    const dimensions = await inferMediaDimensionsFromFile(existingAbsolutePath, mediaType)
+    return {
+      ...args,
+      mediaType,
+      outputMediaType: args.outputMediaType || mediaType,
+      localPath: existingLocalPath,
+      absolutePath: existingAbsolutePath,
+      src: srcFromCanvasLocalPath(existingLocalPath) || args.src,
+      outputWidth: firstNumber(args.outputWidth, dimensions?.width),
+      outputHeight: firstNumber(args.outputHeight, dimensions?.height),
+    }
+  }
+
+  if (srcIsBrowserReadable(args.src) && !args.src.startsWith('/asset-store/')) {
+    return args
+  }
+
+  const candidatePath = firstString(args.absolutePath, isAbsoluteLocalPath(args.src) ? args.src : undefined)
+  if (!candidatePath) return args
+
+  const sourcePath = normalize(candidatePath)
+  let sourceStat
+  try {
+    sourceStat = await stat(sourcePath)
+  } catch {
+    return args
+  }
+  if (!sourceStat.isFile()) return args
+
+  const mediaType = args.mediaType || inferMediaTypeFromPath(sourcePath)
+  const group = mediaType === 'video' ? 'videos' : 'images'
+  const extension = extname(sourcePath).replace(/^\./, '') || (mediaType === 'video' ? 'mp4' : 'png')
+  const baseName = sanitizeFilePart(basename(sourcePath, extname(sourcePath))) || 'generated-media'
+  const fileName = `${baseName}-${Date.now()}.${extension}`
+  const localPath = `${STORE_DIR}/assets/${group}/${fileName}`
+  const runtimeAssetsRoot = runtime.assetsRoot || join(runtime.storeRoot, 'assets')
+  const absolutePath = join(runtimeAssetsRoot, group, fileName)
+
+  await mkdir(join(runtimeAssetsRoot, group), { recursive: true })
+  await materializeWritebackFile(sourcePath, absolutePath)
+  const dimensions = await inferMediaDimensionsFromFile(absolutePath, mediaType)
+
+  return {
+    ...args,
+    mediaType,
+    outputMediaType: args.outputMediaType || mediaType,
+    src: `/asset-store/assets/${group}/${fileName}`,
+    localPath,
+    absolutePath,
+    outputWidth: firstNumber(args.outputWidth, dimensions?.width),
+    outputHeight: firstNumber(args.outputHeight, dimensions?.height),
+  }
+}
+
+async function inferMediaDimensionsFromFile(path, mediaType) {
+  if (mediaType === 'image') {
+    try {
+      return inferMediaDimensionsFromBytes(await readFile(path), mediaType, path)
+    } catch {
+      return undefined
+    }
+  }
+  if (mediaType === 'video') return inferVideoDimensionsFromFile(path)
+  return undefined
+}
+
+function inferMediaDimensionsFromBytes(bytes, mediaType, hint = '') {
+  if (mediaType !== 'image' || !Buffer.isBuffer(bytes)) return undefined
+  return inferPngDimensions(bytes) || inferJpegDimensions(bytes) || inferGifDimensions(bytes) || inferWebpDimensions(bytes, hint)
+}
+
+function validDimensions(width, height) {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return undefined
+  if (width <= 0 || height <= 0) return undefined
+  return { width, height }
+}
+
+async function inferVideoDimensionsFromFile(path) {
+  let stdout
+  try {
+    const result = await execFileAsync(
+      'ffprobe',
+      [
+        '-v',
+        'error',
+        '-select_streams',
+        'v:0',
+        '-show_entries',
+        'stream=width,height:stream_tags=rotate:stream_side_data=rotation',
+        '-of',
+        'json',
+        path,
+      ],
+      { maxBuffer: 1024 * 1024, timeout: 3000 }
+    )
+    stdout = result.stdout
+  } catch {
+    return undefined
+  }
+
+  try {
+    const parsed = JSON.parse(String(stdout || '{}'))
+    const stream = Array.isArray(parsed.streams)
+      ? parsed.streams.find((candidate) => validDimensions(Number(candidate?.width), Number(candidate?.height))) || parsed.streams[0]
+      : undefined
+    const dimensions = validDimensions(Number(stream?.width), Number(stream?.height))
+    if (!dimensions) return undefined
+
+    const rotation = getVideoStreamRotation(stream)
+    if (rotation === 90 || rotation === 270) {
+      return { width: dimensions.height, height: dimensions.width }
+    }
+    return dimensions
+  } catch {
+    return undefined
+  }
+}
+
+function getVideoStreamRotation(stream) {
+  const candidates = [
+    stream?.tags?.rotate,
+    ...(Array.isArray(stream?.side_data_list) ? stream.side_data_list.map((entry) => entry?.rotation) : []),
+  ]
+  for (const candidate of candidates) {
+    const value = Number(candidate)
+    if (!Number.isFinite(value)) continue
+    return ((Math.round(value) % 360) + 360) % 360
+  }
+  return 0
+}
+
+function inferPngDimensions(bytes) {
+  if (bytes.length < 24) return undefined
+  if (bytes.readUInt32BE(0) !== 0x89504e47 || bytes.readUInt32BE(4) !== 0x0d0a1a0a) return undefined
+  if (bytes.toString('ascii', 12, 16) !== 'IHDR') return undefined
+  return validDimensions(bytes.readUInt32BE(16), bytes.readUInt32BE(20))
+}
+
+function inferGifDimensions(bytes) {
+  if (bytes.length < 10) return undefined
+  const signature = bytes.toString('ascii', 0, 6)
+  if (signature !== 'GIF87a' && signature !== 'GIF89a') return undefined
+  return validDimensions(bytes.readUInt16LE(6), bytes.readUInt16LE(8))
+}
+
+function inferJpegDimensions(bytes) {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined
+
+  let offset = 2
+  while (offset + 8 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1
+      continue
+    }
+
+    let marker = bytes[offset + 1]
+    offset += 2
+    while (marker === 0xff && offset < bytes.length) {
+      marker = bytes[offset]
+      offset += 1
+    }
+
+    if (marker === 0xd9 || marker === 0xda) return undefined
+    if (offset + 2 > bytes.length) return undefined
+
+    const segmentLength = bytes.readUInt16BE(offset)
+    if (segmentLength < 2 || offset + segmentLength > bytes.length) return undefined
+
+    const isStartOfFrame =
+      (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf)
+    if (isStartOfFrame && segmentLength >= 7) {
+      return validDimensions(bytes.readUInt16BE(offset + 5), bytes.readUInt16BE(offset + 3))
+    }
+
+    offset += segmentLength
+  }
+
+  return undefined
+}
+
+function inferWebpDimensions(bytes) {
+  if (bytes.length < 30) return undefined
+  if (bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WEBP') return undefined
+  const chunkType = bytes.toString('ascii', 12, 16)
+
+  if (chunkType === 'VP8X' && bytes.length >= 30) {
+    const width = 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16)
+    const height = 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16)
+    return validDimensions(width, height)
+  }
+
+  if (chunkType === 'VP8 ' && bytes.length >= 30) {
+    const width = bytes.readUInt16LE(26) & 0x3fff
+    const height = bytes.readUInt16LE(28) & 0x3fff
+    return validDimensions(width, height)
+  }
+
+  if (chunkType === 'VP8L' && bytes.length >= 25 && bytes[20] === 0x2f) {
+    const bits = bytes.readUInt32LE(21)
+    const width = (bits & 0x3fff) + 1
+    const height = ((bits >> 14) & 0x3fff) + 1
+    return validDimensions(width, height)
+  }
+
+  return undefined
+}
+
+function srcIsBrowserReadable(src) {
+  if (typeof src !== 'string' || src.length === 0) return false
+  return src.startsWith('/asset-store/') || /^https?:\/\//i.test(src) || /^data:(image|video)\//i.test(src)
+}
+
+function isAbsoluteLocalPath(value) {
+  return typeof value === 'string' && isAbsolute(value) && !value.startsWith('/asset-store/')
+}
+
+async function materializeWritebackFile(sourcePath, targetPath) {
+  try {
+    await copyFile(sourcePath, targetPath, constants.COPYFILE_FICLONE_FORCE)
+    return
+  } catch {
+    // Fall through to a hard link or full copy when copy-on-write cloning is unavailable.
+  }
+
+  try {
+    await link(sourcePath, targetPath)
+    return
+  } catch {
+    // Cross-device links are expected to fail; keep writeback durable with a plain copy.
+  }
+
+  await cp(sourcePath, targetPath)
+}
+
+function canvasApiUrl(path) {
+  return new URL(path, CANVAS_SERVER_URL).toString()
+}
+
+function canvasRuntimeTimeoutSignal() {
+  const timeoutMs = Number.isFinite(CANVAS_RUNTIME_TIMEOUT_MS) && CANVAS_RUNTIME_TIMEOUT_MS > 0 ? CANVAS_RUNTIME_TIMEOUT_MS : 500
+  return AbortSignal.timeout(Math.max(50, timeoutMs))
+}
+
+function normalizeCanvasRuntime(input) {
+  const runtime = input?.runtime && typeof input.runtime === 'object' ? input.runtime : input
+  if (!runtime || typeof runtime !== 'object' || typeof runtime.storeRoot !== 'string' || runtime.storeRoot.length === 0) {
+    return undefined
+  }
+
+  const normalizedStoreRoot = normalize(runtime.storeRoot)
+  const normalizedWorkspaceRoot =
+    typeof runtime.workspaceRoot === 'string' && runtime.workspaceRoot.length > 0
+      ? normalize(runtime.workspaceRoot)
+      : dirname(normalizedStoreRoot)
+
+  return {
+    source: typeof runtime.source === 'string' ? runtime.source : 'canvas-server',
+    root: typeof runtime.root === 'string' ? normalize(runtime.root) : undefined,
+    workspaceRoot: normalizedWorkspaceRoot,
+    storeDir: typeof runtime.storeDir === 'string' ? runtime.storeDir : STORE_DIR,
+    storeRoot: normalizedStoreRoot,
+    legacyStoreRoot:
+      typeof runtime.legacyStoreRoot === 'string' && runtime.legacyStoreRoot.length > 0
+        ? normalize(runtime.legacyStoreRoot)
+        : join(normalizedWorkspaceRoot, LEGACY_STORE_DIR),
+    metadataRoot:
+      typeof runtime.metadataRoot === 'string' && runtime.metadataRoot.length > 0
+        ? normalize(runtime.metadataRoot)
+        : join(normalizedStoreRoot, 'metadata'),
+    assetsRoot:
+      typeof runtime.assetsRoot === 'string' && runtime.assetsRoot.length > 0
+        ? normalize(runtime.assetsRoot)
+        : join(normalizedStoreRoot, 'assets'),
+    commandsRoot:
+      typeof runtime.commandsRoot === 'string' && runtime.commandsRoot.length > 0
+        ? normalize(runtime.commandsRoot)
+        : join(normalizedStoreRoot, 'commands'),
+    pendingCommandsPath:
+      typeof runtime.pendingCommandsPath === 'string' && runtime.pendingCommandsPath.length > 0
+        ? normalize(runtime.pendingCommandsPath)
+        : join(normalizedStoreRoot, 'commands', 'pending.jsonl'),
+    clientVersion: typeof runtime.clientVersion === 'string' ? runtime.clientVersion : undefined,
+  }
+}
+
+function sameRuntimeStore(a, b = createLocalCanvasRuntime()) {
+  return Boolean(a?.storeRoot && b?.storeRoot && normalize(a.storeRoot) === normalize(b.storeRoot))
+}
+
+async function readActiveCanvasRuntime() {
+  if (process.env.COFLOW_RUNTIME_JSON) {
+    try {
+      return normalizeCanvasRuntime(JSON.parse(process.env.COFLOW_RUNTIME_JSON))
+    } catch {
+      return undefined
+    }
+  }
+
+  try {
+    const response = await fetch(canvasApiUrl('/api/runtime'), {
+      signal: canvasRuntimeTimeoutSignal(),
+    })
+    if (!response.ok) return undefined
+    return normalizeCanvasRuntime(await response.json())
+  } catch {
+    return undefined
+  }
+}
+
+async function readCanvasServerJson(path) {
+  const response = await fetch(canvasApiUrl(path), {
+    signal: canvasRuntimeTimeoutSignal(),
+  })
+  if (!response.ok) throw new Error(`Canvas server ${path} returned HTTP ${response.status}`)
+  return response.json()
+}
+
+async function readLatestSelectionForRuntime(runtime) {
+  if (!runtime || sameRuntimeStore(runtime) || runtime.source === 'env') return readLatestSelection()
+  try {
+    const latest = await readCanvasServerJson('/api/selection')
+    if (latest?.selection) return latest
+  } catch {
+    // Fall back to the MCP-local cache when the running canvas cannot answer.
+  }
+  return readLatestSelection()
+}
+
+async function readLatestFrameContextForRuntime(runtime) {
+  if (!runtime || sameRuntimeStore(runtime) || runtime.source === 'env') return readLatestFrameContext()
+  try {
+    const latest = await readCanvasServerJson('/api/frame-context')
+    if (latest?.context !== undefined) return latest
+  } catch {
+    // Fall back to the MCP-local cache when the running canvas cannot answer.
+  }
+  return readLatestFrameContext()
+}
+
+async function appendCanvasCommandForRuntime(command, runtime) {
+  if (!runtime || sameRuntimeStore(runtime) || runtime.source === 'env') {
+    const targetCommandsRoot = runtime?.commandsRoot || commandsRoot
+    const targetPendingCommandsPath = runtime?.pendingCommandsPath || pendingCommandsPath
+    await mkdir(targetCommandsRoot, { recursive: true })
+    await appendFile(targetPendingCommandsPath, `${JSON.stringify(command)}\n`)
+    return {
+      ok: true,
+      command,
+      queuedVia: runtime?.source === 'env' && !sameRuntimeStore(runtime) ? 'runtime-file' : 'local-file',
+      storeRoot: runtime?.storeRoot || storeRoot,
+    }
+  }
+
+  try {
+    const response = await fetch(canvasApiUrl('/api/commands'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(command),
+      signal: canvasRuntimeTimeoutSignal(),
+    })
+    const payload = await response.json().catch(() => null)
+    if (!response.ok || payload?.ok === false) {
+      return {
+        ok: false,
+        error: `Canvas server command enqueue failed with HTTP ${response.status}.`,
+        detail: payload?.error,
+        canvasUrl: CANVAS_SERVER_URL,
+        storeRoot: runtime.storeRoot,
+      }
+    }
+    return {
+      ok: true,
+      command: payload?.command || command,
+      queuedVia: 'canvas-server',
+      storeRoot: runtime.storeRoot,
+      canvasUrl: CANVAS_SERVER_URL,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Canvas server command enqueue failed: ${error instanceof Error ? error.message : String(error)}`,
+      canvasUrl: CANVAS_SERVER_URL,
+      storeRoot: runtime.storeRoot,
+    }
+  }
+}
+
 async function enqueueCanvasCommand(rawArgs, toolName) {
-  const args = normalizeWritebackArgs(rawArgs)
-  const validationError = validateWritebackCommandArgs(args, toolName)
+  const activeRuntime = await readActiveCanvasRuntime()
+  const targetRuntime = activeRuntime || createLocalCanvasRuntime()
+  const args = await materializeExternalWritebackAsset(normalizeWritebackArgs(rawArgs), targetRuntime)
+  const validationError = validateWritebackCommandArgs(args, toolName, targetRuntime)
   if (validationError) return validationError
 
-  const latest = await readLatestFrameContext()
-  const latestSelection = await readLatestSelection()
-  const selectedSourceShapeId =
-    toolName === 'canvas.insert_media'
-      ? latestSelection.selection?.selectedItems?.find((item) => item?.asset?.mediaType === 'image' || item?.asset?.mediaType === 'video')?.id
-      : undefined
-  const sourceShapeId = args.sourceShapeId || selectedSourceShapeId
-  const allowFrameFallback = args.disableFrameFallback !== true
+  const latest = await readLatestFrameContextForRuntime(activeRuntime)
+  const latestSelection = await readLatestSelectionForRuntime(activeRuntime)
+  const sourceShapeId = args.sourceShapeId || sourceShapeIdFromReferences(args.references)
+  const hasReferenceInput = Boolean(sourceShapeId) || hasWritebackReferenceInput(args.references)
+  const allowFrameFallback = args.disableFrameFallback !== true && (toolName !== 'canvas.insert_media' || hasReferenceInput)
   const frameId =
     args.frameId ||
     (allowFrameFallback ? latestSelection.selection?.activeFrame?.frameId || (!sourceShapeId ? latest.context?.frameId : undefined) : undefined)
@@ -1528,19 +2086,55 @@ async function enqueueCanvasCommand(rawArgs, toolName) {
     minClientVersion: queuedType === 'canvas.create_version' || queuedType === 'canvas.link_versions' ? CANVAS_CLIENT_VERSION : undefined,
   }
 
-  await mkdir(commandsRoot, { recursive: true })
-  await appendFile(pendingCommandsPath, `${JSON.stringify(command)}\n`)
+  const queued = await appendCanvasCommandForRuntime(command, activeRuntime)
+  if (!queued.ok) return queued
 
   return {
     ok: true,
-    command,
+    command: queued.command,
+    queuedVia: queued.queuedVia,
+    runtime: {
+      canvasUrl: queued.canvasUrl || CANVAS_SERVER_URL,
+      storeRoot: queued.storeRoot,
+    },
     note:
       queuedType === 'canvas.create_version'
-        ? `Queued canvas writeback. Keep the canvas browser open; it will place the generated version on the board.`
+        ? hasReferenceInput
+          ? `Queued canvas writeback. Keep the canvas browser open; it will place the generated version on the board.`
+          : `Queued standalone canvas writeback. Keep the canvas browser open; it will place the generated media on the board without a lineage link.`
         : frameId || sourceShapeId
           ? `Queued ${toolName} for the external Codex/Skill runtime.`
           : `Queued ${toolName} without frameId.`,
   }
+}
+
+function sourceShapeIdFromReferences(references) {
+  if (!Array.isArray(references)) return undefined
+  for (const reference of references) {
+    if (!reference || typeof reference !== 'object') continue
+    const shapeId = firstString(reference.sourceShapeId, reference.shapeId)
+    if (shapeId) return shapeId
+  }
+  return undefined
+}
+
+function hasWritebackReferenceInput(references) {
+  if (!Array.isArray(references)) return false
+  return references.some((reference) => {
+    if (!reference || typeof reference !== 'object') return false
+    return Boolean(
+      firstString(
+        reference.sourceShapeId,
+        reference.shapeId,
+        reference.assetId,
+        reference.localPath,
+        reference.absolutePath,
+        reference.src,
+        reference.uri,
+        reference.url,
+      ),
+    )
+  })
 }
 
 function respond(id, result, error) {

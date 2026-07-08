@@ -104,6 +104,207 @@ test('runAtlasProvider uploads local reference, submits image task, and polls ou
   }
 })
 
+test('runAtlasProvider passes explicit image size from providerOptions', async () => {
+  const previousFetch = globalThis.fetch
+  const calls = []
+
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || 'GET', body: init.body })
+
+    if (String(url).endsWith('/model/generateImage')) {
+      const body = JSON.parse(init.body)
+      assert.equal(body.model, 'openai/gpt-image-2/text-to-image')
+      assert.equal(body.size, '1024x1792')
+      assert.equal(body.aspect_ratio, undefined)
+      assert.equal(body.ratio, undefined)
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'image-size-prediction-123',
+          status: 'starting',
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/prediction/image-size-prediction-123')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'image-size-prediction-123',
+          status: 'completed',
+          outputs: ['https://atlas.example.test/generated/portrait.png'],
+        },
+      })
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  try {
+    const result = await runAtlasProvider(
+      {
+        output: { type: 'image' },
+        prompt: 'A vertical fashion portrait.',
+        references: [],
+        providerOptions: {
+          size: '1024x1792',
+          aspect_ratio: '9:16',
+        },
+      },
+      {
+        env: {
+          ATLASCLOUD_API_KEY: 'test-key',
+          ATLASCLOUD_IMAGE_SIZE: '1024x1024',
+          ATLAS_POLL_INTERVAL_MS: '1',
+          ATLAS_POLL_ATTEMPTS: '1',
+        },
+      },
+    )
+
+    assert.equal(result.status, 'succeeded')
+    assert.equal(result.outputUrl, 'https://atlas.example.test/generated/portrait.png')
+    assert.equal(calls.some((call) => call.url.endsWith('/model/uploadMedia')), false)
+    assert.equal(calls.some((call) => call.url.endsWith('/model/generateImage')), true)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('runAtlasProvider maps image aspect ratio to size when size is not provided', async () => {
+  const previousFetch = globalThis.fetch
+
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith('/model/generateImage')) {
+      const body = JSON.parse(init.body)
+      assert.equal(body.size, '768x1024')
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'image-ratio-prediction-123',
+          status: 'starting',
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/prediction/image-ratio-prediction-123')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'image-ratio-prediction-123',
+          status: 'completed',
+          outputs: ['https://atlas.example.test/generated/three-by-four.png'],
+        },
+      })
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  try {
+    const result = await runAtlasProvider(
+      {
+        output: { type: 'image' },
+        prompt: 'A 3:4 coastal house illustration.',
+        references: [],
+        providerOptions: {
+          aspect_ratio: '3:4',
+        },
+      },
+      {
+        env: {
+          ATLASCLOUD_API_KEY: 'test-key',
+          ATLASCLOUD_IMAGE_SIZE: '1024x1024',
+          ATLAS_POLL_INTERVAL_MS: '1',
+          ATLAS_POLL_ATTEMPTS: '1',
+        },
+      },
+    )
+
+    assert.equal(result.status, 'succeeded')
+    assert.equal(result.outputUrl, 'https://atlas.example.test/generated/three-by-four.png')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('runAtlasProvider reports a structured upload timeout before submitting image task', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'atlas-upload-timeout-test-'))
+  const imagePath = join(tempRoot, 'source.png')
+  await writeFile(imagePath, Buffer.from('fake-image'))
+  const calls = []
+  const previousFetch = globalThis.fetch
+
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || 'GET' })
+    return new Promise((resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    })
+  }
+
+  try {
+    const result = await runAtlasProvider(
+      {
+        output: { type: 'image' },
+        prompt: 'A clean product image.',
+        references: [{ type: 'image', role: 'source', uri: imagePath }],
+      },
+      {
+        env: {
+          ATLASCLOUD_API_KEY: 'test-key',
+          ATLAS_UPLOAD_TIMEOUT_MS: '5',
+        },
+      },
+    )
+
+    assert.equal(result.status, 'failed')
+    assert.equal(result.stage, 'upload')
+    assert.match(result.error, /upload request timed out/)
+    assert.equal(calls.some((call) => call.url.endsWith('/model/uploadMedia')), true)
+    assert.equal(calls.some((call) => call.url.endsWith('/model/generateImage')), false)
+  } finally {
+    globalThis.fetch = previousFetch
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('runAtlasProvider rejects unsupported video model inputs before uploading references', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'atlas-video-preflight-test-'))
+  const imagePath = join(tempRoot, 'source.png')
+  await writeFile(imagePath, Buffer.from('fake-source-image'))
+  const calls = []
+  const previousFetch = globalThis.fetch
+
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || 'GET' })
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  try {
+    const result = await runAtlasProvider(
+      {
+        output: { type: 'video' },
+        model: 'bytedance/seedance-2.0/text-to-video',
+        prompt: 'Animate this image.',
+        references: [{ type: 'image', role: 'source', uri: imagePath }],
+      },
+      {
+        env: {
+          ATLASCLOUD_API_KEY: 'test-key',
+        },
+      },
+    )
+
+    assert.equal(result.status, 'failed')
+    assert.equal(result.stage, 'preflight')
+    assert.equal(result.validation.code, 'unsupported_reference')
+    assert.match(result.error, /does not support image references/)
+    assert.equal(calls.length, 0)
+  } finally {
+    globalThis.fetch = previousFetch
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
 test('runAtlasProvider falls back to Atlas Cloud image result endpoint when prediction endpoint is unavailable', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'atlas-image-result-fallback-test-'))
   const imagePath = join(tempRoot, 'source.png')
@@ -176,6 +377,79 @@ test('runAtlasProvider falls back to Atlas Cloud image result endpoint when pred
       pollUrls.map((url) => url.replace('https://api.atlascloud.ai/api/v1', '')),
       ['/model/prediction/image-result-123', '/model/result/image-result-123'],
     )
+  } finally {
+    globalThis.fetch = previousFetch
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('runAtlasProvider maps Seedance reference video references into reference_videos', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'atlas-seedance-video-reference-test-'))
+  const videoPath = join(tempRoot, 'source.mp4')
+  await writeFile(videoPath, Buffer.from('fake-source-video'))
+  const previousFetch = globalThis.fetch
+  const submittedBodies = []
+
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith('/model/uploadMedia')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          download_url: 'https://atlas.example.test/uploaded/source.mp4',
+          filename: 'source.mp4',
+          size: 10,
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/generateVideo')) {
+      const body = JSON.parse(init.body)
+      submittedBodies.push(body)
+      assert.equal(body.model, 'bytedance/seedance-2.0-mini/reference-to-video')
+      assert.deepEqual(body.reference_videos, ['https://atlas.example.test/uploaded/source.mp4'])
+      assert.equal(body.reference_images, undefined)
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'seedance-reference-video-prediction-123',
+          status: 'starting',
+        },
+      })
+    }
+
+    if (String(url).endsWith('/model/prediction/seedance-reference-video-prediction-123')) {
+      return jsonResponse({
+        code: 200,
+        data: {
+          id: 'seedance-reference-video-prediction-123',
+          status: 'completed',
+          outputs: ['https://atlas.example.test/generated/output.mp4'],
+        },
+      })
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  try {
+    const result = await runAtlasProvider(
+      {
+        output: { type: 'video' },
+        model: 'bytedance/seedance-2.0-mini/reference-to-video',
+        prompt: 'Regenerate this motion.',
+        references: [{ type: 'video', role: 'motion_reference', uri: videoPath }],
+      },
+      {
+        env: {
+          ATLASCLOUD_API_KEY: 'test-key',
+          ATLAS_POLL_INTERVAL_MS: '1',
+          ATLAS_POLL_ATTEMPTS: '1',
+        },
+      },
+    )
+
+    assert.equal(result.status, 'succeeded')
+    assert.equal(submittedBodies.length, 1)
   } finally {
     globalThis.fetch = previousFetch
     await rm(tempRoot, { recursive: true, force: true })

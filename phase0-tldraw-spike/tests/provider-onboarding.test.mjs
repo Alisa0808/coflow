@@ -25,12 +25,43 @@ test('provider onboarding prompts first-run users with default setup actions', (
   assert.equal(onboarding.connectionStatus.codexBuiltInImageModel, 'ready')
   assert.equal(onboarding.connectionStatus.atlasCloud, 'needs_api_key')
   assert.match(onboarding.userMessage, /CoFlow is ready to use with these defaults/)
-  assert.match(onboarding.userMessage, /Image generation and image editing: Codex built-in GPT Image 2/)
+  assert.match(onboarding.userMessage, /Image generation and editing: Codex built-in GPT Image 2/)
   assert.match(onboarding.userMessage, /Video generation and video editing: Atlas Cloud Seedance 2\.0/)
   assert.ok(onboarding.actions.some((action) => action.id === 'keep_defaults_setup_atlas_cloud'))
   assert.ok(onboarding.actions.some((action) => action.id === 'customize_providers_and_models'))
   assert.ok(onboarding.actions.some((action) => action.id === 'skip_for_now'))
   assert.equal(JSON.stringify(onboarding).includes('ATLASCLOUD_API_KEY'), false)
+})
+
+test('provider onboarding does not ask connected first-run users to add an Atlas Cloud key', () => {
+  const settings = normalizeProviderSettings({})
+  const status = getProviderStatus(
+    { ATLASCLOUD_API_KEY: 'secret-test-key' },
+    { providerSettings: settings, settingsPath: '/workspace/.coflow/metadata/provider-settings.json' }
+  )
+  const onboarding = buildProviderOnboarding({
+    providerSettings: settings,
+    providerStatus: status,
+    settingsPath: '/workspace/.coflow/metadata/provider-settings.json',
+  })
+
+  assert.equal(onboarding.status, 'not_started')
+  assert.equal(onboarding.shouldPrompt, true)
+  assert.equal(onboarding.connectionStatus.codexBuiltInImageModel, 'ready')
+  assert.equal(onboarding.connectionStatus.atlasCloud, 'connected')
+  assert.equal(onboarding.generationReady, true)
+  assert.match(onboarding.userMessage, /Atlas Cloud: Connected/)
+  assert.match(onboarding.userMessage, /Image generation and editing: Codex built-in GPT Image 2/)
+  assert.match(onboarding.userMessage, /Keep these defaults to save them/)
+  assert.doesNotMatch(onboarding.userMessage, /connect your Atlas Cloud API key/i)
+  assert.doesNotMatch(onboarding.userMessage, /Needs API key/)
+
+  const firstAction = onboarding.actions[0]
+  assert.equal(firstAction.id, 'keep_connected_defaults')
+  assert.equal(firstAction.label, 'Keep connected defaults')
+  assert.equal(firstAction.nextStep, 'ready')
+  assert.equal(firstAction.requiresProviderCredentialCheck, false)
+  assert.equal(JSON.stringify(onboarding).includes('secret-test-key'), false)
 })
 
 test('provider onboarding exposes rerun path after setup is skipped', () => {
@@ -62,7 +93,9 @@ test('provider onboarding saves defaults but does not report ready when Atlas Cl
   assert.equal(onboarding.generationReady, false)
   assert.equal(onboarding.connectionStatus.atlasCloud, 'needs_api_key')
   assert.match(onboarding.userMessage, /CoFlow defaults are saved, but Atlas Cloud is not connected yet/)
-  assert.match(onboarding.userMessage, /Atlas Cloud: Needs API key/)
+  assert.match(onboarding.userMessage, /Image generation: Atlas Cloud image model/)
+  assert.match(onboarding.userMessage, /Image editing and local-reference edits: Atlas Cloud image model/)
+  assert.match(onboarding.userMessage, /Atlas Cloud: Needs API key for image and video generation\/editing/)
   assert.match(onboarding.userMessage, /https:\/\/www\.atlascloud\.ai\/console\/api-keys\?utm_source=coflow&ref=F27PTG/)
   assert.match(onboarding.userMessage, /CoFlow does not currently have an API-key input inside the canvas UI/)
   assert.match(onboarding.userMessage, /ATLASCLOUD_API_KEY/)
@@ -89,9 +122,30 @@ test('provider onboarding reports connected defaults when Atlas Cloud key is con
   assert.equal(onboarding.connectionStatus.codexBuiltInImageModel, 'ready')
   assert.equal(onboarding.connectionStatus.atlasCloud, 'connected')
   assert.equal(onboarding.generationReady, true)
-  assert.equal(
-    onboarding.userMessage,
-    'Atlas Cloud is connected. CoFlow can now generate images with Codex built-in GPT Image 2 and videos with Atlas Cloud Seedance 2.0.'
+  assert.match(onboarding.userMessage, /Atlas Cloud is connected/)
+  assert.match(onboarding.userMessage, /Image generation: Codex built-in GPT Image 2/)
+  assert.match(onboarding.userMessage, /Image editing and local-reference edits: Codex built-in GPT Image 2/)
+  assert.equal(JSON.stringify(onboarding).includes('secret-test-key'), false)
+})
+
+test('provider onboarding reports connected Atlas Cloud image defaults when selected', () => {
+  const settings = normalizeProviderSettings({
+    status: 'configured',
+    image: { provider: 'atlas', modelIntent: 'image_edit' },
+    video: { provider: 'atlas', modelIntent: 'reference_to_video' },
+  })
+  const status = getProviderStatus(
+    { ATLASCLOUD_API_KEY: 'secret-test-key' },
+    { providerSettings: settings }
   )
+  const onboarding = buildProviderOnboarding({ providerSettings: settings, providerStatus: status })
+
+  assert.equal(onboarding.status, 'configured')
+  assert.equal(onboarding.connectionStatus.atlasCloud, 'connected')
+  assert.equal(onboarding.generationReady, true)
+  assert.match(onboarding.userMessage, /Atlas Cloud is connected/)
+  assert.match(onboarding.userMessage, /Image generation: Atlas Cloud image model/)
+  assert.match(onboarding.userMessage, /Image editing and local-reference edits: Atlas Cloud image model/)
+  assert.doesNotMatch(onboarding.userMessage, /Codex built-in GPT Image 2/)
   assert.equal(JSON.stringify(onboarding).includes('secret-test-key'), false)
 })

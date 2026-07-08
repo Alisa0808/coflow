@@ -3,6 +3,7 @@ import type { CanvasSelectionSnapshot, FrameContext } from './canvasContracts'
 export type CanvasCommand = {
   id: string
   type: 'canvas.create_version' | 'canvas.insert_media' | 'canvas.link_versions'
+  requestedTool?: 'canvas.create_version' | 'canvas.insert_media' | 'canvas.link_versions'
   frameId?: string
   sourceShapeId?: string
   targetShapeId?: string

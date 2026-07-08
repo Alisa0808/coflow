@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { getProviderStatus } from './lib/provider-config.mjs'
 import { buildProviderOnboarding } from './lib/provider-onboarding.mjs'
 import { readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
+import { buildCanvasManifest, mergeCanvasDocuments } from './lib/canvas-document-store.mjs'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 const distRoot = join(root, 'dist')
@@ -63,6 +64,13 @@ await mkdir(selectionCaptureResponsesRoot, { recursive: true })
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
+
+    if (url.pathname === '/api/runtime' && request.method === 'GET') {
+      return sendJson(response, {
+        ok: true,
+        runtime: getRuntimeInfo(),
+      })
+    }
 
     if (url.pathname === '/api/frame-context' && request.method === 'POST') {
       const body = await readJsonBody(request)
@@ -494,34 +502,22 @@ async function writeJsonAtomic(path, data) {
 }
 
 async function readCanvasDocument() {
-  const manifest = await readJsonFile(canvasManifestPath, null)
-  const activePageId = typeof manifest?.activePageId === 'string' ? manifest.activePageId : undefined
-  if (activePageId) {
-    const pageDocument = await readJsonFile(getCanvasPageDocumentPath(activePageId), null)
-    if (pageDocument?.snapshot) return pageDocument
+  const documents = []
+  const legacyDocument = await readJsonFile(canvasDocumentPath, null)
+  if (legacyDocument?.snapshot) documents.push(legacyDocument)
+
+  for (const pageDocument of await readCanvasPageDocuments()) {
+    if (pageDocument?.snapshot) documents.push(pageDocument)
   }
 
-  return readJsonFile(canvasDocumentPath, null)
+  return mergeCanvasDocuments(documents)
 }
 
 async function writeCanvasDocument(document) {
   const activePageId = sanitizeFilePart(document.currentPageId || 'page')
   const pageDocumentPath = getCanvasPageDocumentPath(activePageId)
-  const manifest = {
-    version: 1,
-    updatedAt: document.updatedAt,
-    source: document.source,
-    activePageId,
-    pages: [
-      {
-        id: activePageId,
-        localPath: `.coflow/canvas/pages/${activePageId}/canvas.json`,
-        updatedAt: document.updatedAt,
-      },
-    ],
-    legacyDocumentPath: '.coflow/canvas/document.json',
-    storageMode: 'page-snapshot-v1',
-  }
+  const existingManifest = await readJsonFile(canvasManifestPath, null)
+  const manifest = buildCanvasManifest(document, existingManifest)
 
   await backupCanvasFileIfPresent(pageDocumentPath, activePageId)
   await writeJsonAtomic(pageDocumentPath, document)
@@ -536,6 +532,23 @@ async function writeCanvasDocument(document) {
       camera: document.camera,
     })
   }
+}
+
+async function readCanvasPageDocuments() {
+  let entries
+  try {
+    entries = await readdir(canvasPagesRoot, { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  const documents = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const document = await readJsonFile(join(canvasPagesRoot, entry.name, 'canvas.json'), null)
+    if (document?.snapshot) documents.push(document)
+  }
+  return documents
 }
 
 function getCanvasPageDocumentPath(pageId) {
@@ -682,6 +695,7 @@ function createCommand(input) {
     at: new Date().toISOString(),
     source: input.source || 'browser-api',
     type: input.type,
+    requestedTool: input.requestedTool,
     frameId: input.frameId,
     sourceShapeId: input.sourceShapeId,
     targetShapeId: input.targetShapeId,
@@ -690,6 +704,7 @@ function createCommand(input) {
     provider: input.provider,
     outputMediaType: input.outputMediaType,
     generationMode: input.generationMode,
+    references: Array.isArray(input.references) ? input.references : undefined,
     mediaType: input.mediaType,
     src: input.src,
     localPath: input.localPath,
@@ -709,6 +724,26 @@ function createCommand(input) {
     status: input.status,
     skillName: input.skillName,
     minClientVersion: input.minClientVersion,
+  }
+}
+
+function getRuntimeInfo() {
+  return {
+    version: 1,
+    root,
+    workspaceRoot,
+    storeDir: STORE_DIR,
+    storeRoot,
+    legacyStoreRoot,
+    metadataRoot,
+    assetsRoot,
+    commandsRoot,
+    pendingCommandsPath,
+    canvasRoot,
+    canvasPagesRoot,
+    canvasDocumentPath,
+    clientVersion: CANVAS_CLIENT_VERSION,
+    port,
   }
 }
 

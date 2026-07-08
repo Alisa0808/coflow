@@ -3,8 +3,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
+import { atlasVideoRouteFromModel, validateAtlasVideoRequest } from '../atlas-video-models.mjs'
 
 const DEFAULT_BASE_URL = 'https://api.atlascloud.ai/api/v1'
+const DEFAULT_UPLOAD_TIMEOUT_MS = 60_000
+const DEFAULT_SUBMIT_TIMEOUT_MS = 60_000
+const DEFAULT_POLL_REQUEST_TIMEOUT_MS = 15_000
 const execFileAsync = promisify(execFile)
 
 export async function runAtlasProvider(payload, options = {}) {
@@ -41,15 +45,65 @@ export async function runAtlasProvider(payload, options = {}) {
   const baseUrl = env.ATLASCLOUD_API_BASE_URL || DEFAULT_BASE_URL
   const outputType = payload.output?.type === 'video' ? 'video' : 'image'
   const prompt = payload.prompt || ''
+  const model = resolveAtlasGenerationModel(payload, {
+    outputType,
+    hasReference: Array.isArray(payload.references) && payload.references.length > 0,
+    env,
+  })
+  if (outputType === 'video') {
+    const validation = validateAtlasVideoRequest({
+      model,
+      references: payload.references ?? [],
+      providerOptions: payload.providerOptions,
+    })
+    if (!validation.ok) {
+      finalizeTimings(timings, startedMs)
+      return {
+        status: 'failed',
+        provider: 'Atlas Cloud',
+        endpointConfigured: true,
+        stage: 'preflight',
+        request: {
+          model,
+          prompt,
+        },
+        timings,
+        error: validation.reason,
+        validation,
+      }
+    }
+  }
+  const uploadTimeoutMs = positiveNumberFromEnv(env.ATLAS_UPLOAD_TIMEOUT_MS, DEFAULT_UPLOAD_TIMEOUT_MS)
+  const submitTimeoutMs = positiveNumberFromEnv(env.ATLAS_SUBMIT_TIMEOUT_MS, DEFAULT_SUBMIT_TIMEOUT_MS)
+  const pollRequestTimeoutMs = positiveNumberFromEnv(env.ATLAS_POLL_REQUEST_TIMEOUT_MS, DEFAULT_POLL_REQUEST_TIMEOUT_MS)
+  const pollMaxDurationMs = positiveNumberFromEnv(env.ATLAS_POLL_MAX_DURATION_MS, outputType === 'video' ? 250_000 : 180_000)
   const uploadStartedMs = Date.now()
   timings.uploadStartedAt = new Date(uploadStartedMs).toISOString()
-  const uploadedReferences = await uploadReferences(payload.references ?? [], { apiKey, baseUrl })
+  let uploadedReferences
+  try {
+    uploadedReferences = await uploadReferences(payload.references ?? [], { apiKey, baseUrl, timeoutMs: uploadTimeoutMs })
+  } catch (error) {
+    const uploadCompletedMs = Date.now()
+    timings.uploadCompletedAt = new Date(uploadCompletedMs).toISOString()
+    timings.uploadDurationMs = uploadCompletedMs - uploadStartedMs
+    finalizeTimings(timings, startedMs)
+    return {
+      status: 'failed',
+      provider: 'Atlas Cloud',
+      endpointConfigured: true,
+      stage: 'upload',
+      endpoint: `${baseUrl}/model/uploadMedia`,
+      timings,
+      error: errorMessage(error),
+    }
+  }
   const uploadCompletedMs = Date.now()
   timings.uploadCompletedAt = new Date(uploadCompletedMs).toISOString()
   timings.uploadDurationMs = uploadCompletedMs - uploadStartedMs
   const generationPayload = buildAtlasGenerationPayload(payload, {
     outputType,
     prompt,
+    model,
     uploadedReferences,
     env,
   })
@@ -69,15 +123,40 @@ export async function runAtlasProvider(payload, options = {}) {
   const submitEndpoint = `${baseUrl}${submitPath}`
   const submitStartedMs = Date.now()
   timings.submitStartedAt = new Date(submitStartedMs).toISOString()
-  const submitResponse = await fetch(submitEndpoint, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(generationPayload),
-  })
-  const submitText = await submitResponse.text()
+  let submitResponse
+  let submitText
+  try {
+    const submitResult = await fetchTextWithTimeout(
+      submitEndpoint,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(generationPayload),
+      },
+      { timeoutMs: submitTimeoutMs, stage: 'submit' },
+    )
+    submitResponse = submitResult.response
+    submitText = submitResult.text
+  } catch (error) {
+    const submitCompletedMs = Date.now()
+    timings.submitCompletedAt = new Date(submitCompletedMs).toISOString()
+    timings.submitDurationMs = submitCompletedMs - submitStartedMs
+    finalizeTimings(timings, startedMs)
+    return {
+      status: 'failed',
+      provider: 'Atlas Cloud',
+      endpointConfigured: true,
+      stage: 'submit',
+      endpoint: submitEndpoint,
+      request: generationPayload,
+      uploadedReferences,
+      timings,
+      error: errorMessage(error),
+    }
+  }
   const submitBody = parseMaybeJson(submitText)
   const submitCompletedMs = Date.now()
   timings.submitCompletedAt = new Date(submitCompletedMs).toISOString()
@@ -89,6 +168,7 @@ export async function runAtlasProvider(payload, options = {}) {
       status: 'failed',
       provider: 'Atlas Cloud',
       endpointConfigured: true,
+      stage: 'submit',
       endpoint: submitEndpoint,
       httpStatus: submitResponse.status,
       request: generationPayload,
@@ -105,6 +185,7 @@ export async function runAtlasProvider(payload, options = {}) {
       status: 'failed',
       provider: 'Atlas Cloud',
       endpointConfigured: true,
+      stage: 'submit',
       endpoint: submitEndpoint,
       request: generationPayload,
       uploadedReferences,
@@ -122,6 +203,8 @@ export async function runAtlasProvider(payload, options = {}) {
     outputType,
     attempts: Number(env.ATLAS_POLL_ATTEMPTS || (outputType === 'video' ? 160 : 100)),
     intervalMs: Number(env.ATLAS_POLL_INTERVAL_MS || 2000),
+    requestTimeoutMs: pollRequestTimeoutMs,
+    maxDurationMs: pollMaxDurationMs,
   })
   const pollCompletedMs = Date.now()
   timings.pollCompletedAt = new Date(pollCompletedMs).toISOString()
@@ -145,21 +228,19 @@ export async function runAtlasProvider(payload, options = {}) {
   }
 }
 
-function buildAtlasGenerationPayload(payload, { outputType, prompt, uploadedReferences, env }) {
+function buildAtlasGenerationPayload(payload, { outputType, prompt, model, uploadedReferences, env }) {
   const hasReference = uploadedReferences.length > 0
   const isReferenceImageEdit = outputType === 'image' && hasReference
-  const model =
-    payload.model ||
-    (outputType === 'video'
-      ? hasReference
-        ? env.ATLASCLOUD_VIDEO_IMAGE_MODEL || 'bytedance/seedance-2.0/reference-to-video'
-        : env.ATLASCLOUD_VIDEO_TEXT_MODEL || 'bytedance/seedance-2.0/text-to-video'
-      : hasReference
-        ? env.ATLASCLOUD_IMAGE_EDIT_MODEL || 'openai/gpt-image-2/edit'
-        : env.ATLASCLOUD_IMAGE_TEXT_MODEL || 'openai/gpt-image-2/text-to-image')
+  const selectedModel =
+    model ||
+    resolveAtlasGenerationModel(payload, {
+      outputType,
+      hasReference,
+      env,
+    })
 
   const request = {
-    model,
+    model: selectedModel,
     prompt: isReferenceImageEdit ? buildImageEditPrompt(prompt) : prompt,
   }
 
@@ -168,7 +249,7 @@ function buildAtlasGenerationPayload(payload, { outputType, prompt, uploadedRefe
       payload,
       prompt,
       env,
-      model,
+      model: selectedModel,
       uploadedReferences,
     })
     if (videoPayload.error) {
@@ -179,7 +260,7 @@ function buildAtlasGenerationPayload(payload, { outputType, prompt, uploadedRefe
     }
     Object.assign(request, videoPayload.fields)
   } else {
-    request.size = env.ATLASCLOUD_IMAGE_SIZE || '1024x1024'
+    request.size = resolveAtlasImageSize({ payload, prompt, env })
   }
 
   if (hasReference && outputType === 'image') {
@@ -194,8 +275,61 @@ function buildAtlasGenerationPayload(payload, { outputType, prompt, uploadedRefe
   return request
 }
 
+function resolveAtlasImageSize({ payload, prompt, env }) {
+  const structuredSize = imageSizeFromValue(imageOption(payload, ['size', 'image_size', 'imageSize']))
+  if (structuredSize) return structuredSize
+
+  const structuredRatio = ratioFromValue(imageOption(payload, ['aspect_ratio', 'aspectRatio', 'ratio']))
+  const structuredRatioSize = imageSizeFromRatio(structuredRatio)
+  if (structuredRatioSize) return structuredRatioSize
+
+  const promptRatio = ratioFromPrompt(prompt)
+  const promptRatioSize = imageSizeFromRatio(promptRatio ? `${promptRatio.w}:${promptRatio.h}` : undefined)
+  if (promptRatioSize) return promptRatioSize
+
+  return imageSizeFromValue(env.ATLASCLOUD_IMAGE_SIZE) || '1024x1024'
+}
+
+function imageSizeFromValue(value) {
+  if (typeof value !== 'string') return undefined
+  const text = value.trim()
+  if (text.toLowerCase() === 'auto') return 'auto'
+  const match = text.match(/^(\d{2,5})\s*[x×]\s*(\d{2,5})$/i)
+  if (!match) return undefined
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return undefined
+  return `${width}x${height}`
+}
+
+function imageSizeFromRatio(ratio) {
+  if (!ratio) return undefined
+  return (
+    {
+      '1:1': '1024x1024',
+      '9:16': '1024x1792',
+      '16:9': '1792x1024',
+      '3:4': '768x1024',
+      '4:3': '1024x768',
+      '2:3': '1024x1536',
+      '3:2': '1536x1024',
+    }[ratio] || undefined
+  )
+}
+
+function imageOption(payload, names) {
+  const containers = [payload?.providerOptions, payload?.options, payload?.params, payload]
+  for (const container of containers) {
+    if (!container || typeof container !== 'object' || Array.isArray(container)) continue
+    for (const name of names) {
+      if (container[name] !== undefined) return container[name]
+    }
+  }
+  return undefined
+}
+
 function buildAtlasVideoPayload({ payload, prompt, env, model, uploadedReferences }) {
-  const route = atlasVideoRoute(model)
+  const route = atlasVideoRouteFromModel(model)
   const fields = {}
   const imageUrls = referenceUrls(uploadedReferences, 'image')
   const videoUrls = referenceUrls(uploadedReferences, 'video')
@@ -237,6 +371,25 @@ function buildAtlasVideoPayload({ payload, prompt, env, model, uploadedReference
   }
 
   if (route === 'reference-to-video') {
+    if (model.startsWith('bytedance/seedance-')) {
+      if (imageUrls.length === 0 && videoUrls.length === 0 && audioUrls.length === 0) {
+        return { error: `${model} requires one or more image, video, or audio references.` }
+      }
+      if (imageUrls.length > 0) fields.reference_images = imageUrls
+      if (videoUrls.length > 0) fields.reference_videos = videoUrls
+      if (audioUrls.length > 0) fields.reference_audios = audioUrls
+      assignVideoOptions(fields, videoOptions, [
+        'duration',
+        'resolution',
+        'ratio',
+        'bitrate_mode',
+        'generate_audio',
+        'watermark',
+        'return_last_frame',
+      ])
+      return { fields }
+    }
+
     if (model.startsWith('alibaba/happyhorse-')) {
       if (imageUrls.length === 0) return { error: `${model} requires one or more image references.` }
       fields.images = imageUrls
@@ -309,15 +462,17 @@ function buildAtlasVideoPayload({ payload, prompt, env, model, uploadedReference
   return { fields }
 }
 
-function atlasVideoRoute(model) {
-  const text = String(model || '')
-  if (text.endsWith('/text-to-video')) return 'text-to-video'
-  if (text.endsWith('/image-to-video')) return 'image-to-video'
-  if (text.endsWith('/reference-to-video')) return 'reference-to-video'
-  if (text.endsWith('/video-edit')) return 'video-edit'
-  if (text.endsWith('/extend-video')) return 'extend-video'
-  if (text.endsWith('/edit-video')) return 'edit-video'
-  return 'unknown'
+function resolveAtlasGenerationModel(payload, { outputType, hasReference, env }) {
+  return (
+    payload.model ||
+    (outputType === 'video'
+      ? hasReference
+        ? env.ATLASCLOUD_VIDEO_IMAGE_MODEL || 'bytedance/seedance-2.0/reference-to-video'
+        : env.ATLASCLOUD_VIDEO_TEXT_MODEL || 'bytedance/seedance-2.0/text-to-video'
+      : hasReference
+        ? env.ATLASCLOUD_IMAGE_EDIT_MODEL || 'openai/gpt-image-2/edit'
+        : env.ATLASCLOUD_IMAGE_TEXT_MODEL || 'openai/gpt-image-2/text-to-image')
+  )
 }
 
 function referenceUrls(uploadedReferences, type) {
@@ -559,7 +714,7 @@ function buildImageEditPrompt(prompt) {
   ].join('\n')
 }
 
-async function uploadReferences(references, { apiKey, baseUrl }) {
+async function uploadReferences(references, { apiKey, baseUrl, timeoutMs }) {
   const uploaded = []
   for (const reference of references) {
     const localPath = reference.uri
@@ -576,14 +731,17 @@ async function uploadReferences(references, { apiKey, baseUrl }) {
     const formData = new FormData()
     formData.append('file', new Blob([uploadFile.buffer], { type: uploadFile.mimeType }), uploadFile.fileName)
     try {
-      const response = await fetch(`${baseUrl}/model/uploadMedia`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${apiKey}`,
+      const { response, text } = await fetchTextWithTimeout(
+        `${baseUrl}/model/uploadMedia`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${apiKey}`,
+          },
+          body: formData,
         },
-        body: formData,
-      })
-      const text = await response.text()
+        { timeoutMs, stage: 'upload' },
+      )
       const body = parseMaybeJson(text)
       if (!response.ok || body?.code >= 400) {
         throw new Error(`Atlas Cloud upload failed: ${response.status} ${text}`)
@@ -648,25 +806,46 @@ function mimeTypeFromFileName(fileName) {
   return 'application/octet-stream'
 }
 
-async function pollPrediction(predictionId, { apiKey, baseUrl, outputType, attempts, intervalMs }) {
+async function pollPrediction(predictionId, { apiKey, baseUrl, outputType, attempts, intervalMs, requestTimeoutMs, maxDurationMs }) {
   let latest = null
+  const startedMs = Date.now()
   const pollPaths = outputType === 'image' ? ['/model/prediction', '/model/result'] : ['/model/prediction']
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (Date.now() - startedMs >= maxDurationMs) break
     if (attempt > 0) await wait(intervalMs)
 
     let lastFailure = null
     for (const pollPath of pollPaths) {
+      if (Date.now() - startedMs >= maxDurationMs) break
       const endpoint = `${baseUrl}${pollPath}/${predictionId}`
-      const response = await fetch(endpoint, {
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-        },
-      })
-      const text = await response.text()
+      let response
+      let text
+      try {
+        const pollResponse = await fetchTextWithTimeout(
+          endpoint,
+          {
+            headers: {
+              authorization: `Bearer ${apiKey}`,
+            },
+          },
+          { timeoutMs: requestTimeoutMs, stage: 'poll' },
+        )
+        response = pollResponse.response
+        text = pollResponse.text
+      } catch (error) {
+        lastFailure = {
+          status: 'failed',
+          stage: 'poll',
+          endpoint,
+          error: errorMessage(error),
+        }
+        continue
+      }
       const body = parseMaybeJson(text)
       if (!response.ok || body?.code >= 400) {
         lastFailure = {
           status: 'failed',
+          stage: 'poll',
           endpoint,
           httpStatus: response.status,
           body,
@@ -680,6 +859,7 @@ async function pollPrediction(predictionId, { apiKey, baseUrl, outputType, attem
       if (status === 'completed' || status === 'succeeded') {
         return {
           status: 'succeeded',
+          stage: 'poll',
           attempts: attempt + 1,
           endpoint,
           predictionStatus: status,
@@ -690,6 +870,7 @@ async function pollPrediction(predictionId, { apiKey, baseUrl, outputType, attem
       if (status === 'failed') {
         return {
           status: 'failed',
+          stage: 'poll',
           attempts: attempt + 1,
           endpoint,
           predictionStatus: status,
@@ -704,6 +885,7 @@ async function pollPrediction(predictionId, { apiKey, baseUrl, outputType, attem
 
   return {
     status: 'processing',
+    stage: 'poll',
     attempts,
     predictionStatus: latest?.status || 'unknown',
     body: latest,
@@ -726,6 +908,35 @@ function normalizeOutputs(data) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function fetchTextWithTimeout(url, init = {}, { timeoutMs, stage }) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    })
+    const text = await response.text()
+    return { response, text }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Atlas Cloud ${stage} request timed out after ${timeoutMs}ms.`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function positiveNumberFromEnv(value, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : fallback
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function parseMaybeJson(text) {

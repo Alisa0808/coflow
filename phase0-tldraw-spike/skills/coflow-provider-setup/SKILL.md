@@ -16,15 +16,18 @@ Users should not need separate skills for "view provider", "change model", "skip
 3. Read `canvas.get_provider_status` for available provider/model metadata and redacted key-configuration diagnostics.
 4. For normal "view provider status" requests, report only:
    - image generation default provider and friendly model name;
-   - image editing default provider and friendly model name;
+   - image editing/reference default provider and friendly model name;
    - text-to-video default provider and friendly model name;
    - video editing/reference-video default provider and friendly model name;
    - onboarding status;
    - whether each selected external provider is configured, without exposing secrets.
 5. Do not expose raw provider model ids such as `bytedance/...` or internal intents such as `reference_to_video` in normal user-facing status. Use friendly model names such as "GPT image 2" or "Seedance 2.0".
 6. If the user wants to change defaults, call `canvas.set_provider_settings`.
+   - If the user switches image generation/editing to Atlas Cloud, save `image.provider: "atlas"` plus the selected `image.textModel` and/or `image.editModel` when a concrete model is chosen from the catalog.
+   - When saving any external provider default, explain the asset-sharing boundary in plain language: opening the canvas alone uploads nothing; when the user later runs a CoFlow image/video generation task with that external provider selected, CoFlow may send only the selected/current-frame local asset(s) and prompt for that task to the provider.
+   - After saving an Atlas Cloud image default, immediately read `canvas.get_provider_status` or `canvas.get_provider_onboarding`. If Atlas Cloud is not connected, guide the user to configure the Atlas Cloud API key before generation; do not imply that the selected Atlas image route is ready without the key.
 7. If the user chooses "Keep defaults and set up Atlas Cloud", call `canvas.set_provider_settings` with `status: "configured"` and the default image/video values from `canvas.get_provider_onboarding`, then immediately read `canvas.get_provider_status` or `canvas.get_provider_onboarding` again to check whether Atlas Cloud is connected.
-   - If Atlas Cloud is connected, tell the user: "Atlas Cloud is connected. CoFlow can now generate images with Codex built-in GPT Image 2 and videos with Atlas Cloud Seedance 2.0."
+   - If Atlas Cloud is connected, tell the user that image generation/editing uses Codex built-in GPT Image 2 and video generation/editing uses Atlas Cloud Seedance 2.0.
    - If Atlas Cloud is not connected, do not present setup as fully ready. Tell the user that defaults are saved but Atlas Cloud needs an API key, then guide them to create one at:
 
      ```text
@@ -86,13 +89,24 @@ CoFlow is ready to use with these defaults:
 To use the default video workflow, connect your Atlas Cloud API key.
 ```
 
+If `canvas.get_provider_onboarding` reports `connectionStatus.atlasCloud: "connected"`, replace the final line with:
+
+```text
+Connection status:
+- Codex built-in image model: Ready
+- Atlas Cloud: Connected
+
+Keep these defaults to save them, or customize providers and models.
+```
+
 Then present these choices in plain language:
 
-1. Keep defaults and set up Atlas Cloud
-   - Save Codex built-in GPT Image 2 for image generation/editing.
+1. Keep defaults and set up Atlas Cloud, or keep connected defaults when Atlas Cloud is already connected
+   - Save Codex built-in GPT Image 2 for image generation, image editing, and local-reference image edits.
    - Save Atlas Cloud Seedance 2.0 for text-to-video, reference-to-video, and video editing.
-   - Immediately check whether the Atlas Cloud API key is connected.
+   - Immediately check whether the Atlas Cloud API key is connected when it is not already connected.
    - If the key is missing, guide the user to the Atlas Cloud API-key URL and clearly show `Atlas Cloud: Needs API key`.
+   - If the key is already connected, clearly show `Atlas Cloud: Connected` and do not ask the user to add another key.
 2. Customize providers and models
    - Step 1: Ask what they want to configure:
      - Image models
@@ -109,6 +123,8 @@ Then present these choices in plain language:
      ```
 
 Do not make provider setup feel like a required canvas-start blocker. It is required only when the chosen generation route needs an external provider credential or a custom provider profile.
+
+Provider setup is not a blanket upload permission. It records provider/model preferences and credential readiness. Actual asset sharing is task-scoped: only after the user invokes a CoFlow image/video generation task should the generation skill send the bounded selected/frame/viewport references needed for that task to the selected external provider.
 
 ## What `shouldPrompt` means
 
@@ -171,7 +187,7 @@ Normal status response should be concise, for example:
 Current defaults:
 
 - Image generation: Codex built-in GPT Image 2
-- Image editing: Codex built-in GPT Image 2
+- Image editing/reference: Codex built-in GPT Image 2
 - Text-to-video: Atlas Cloud Seedance 2.0
 - Reference/video editing: Atlas Cloud Seedance 2.0
 
@@ -195,6 +211,8 @@ If the user wants the full configured model catalog or wants to switch models, t
   - user-facing reference/video-edit label: Seedance 2.0
 
 Saved provider settings override these built-in defaults. User instructions in the current request override saved settings for that run.
+
+If saved image settings select Atlas Cloud, `coflow-image` must route image generation/editing through `canvas.run_provider` with the selected Atlas image model. If Atlas Cloud is missing credentials, the setup response must guide the user to configure `ATLASCLOUD_API_KEY` rather than silently falling back to Codex built-in imagegen.
 
 CoFlow ships with a small verified built-in Atlas Cloud model catalog so users can switch common models without typing raw model ids. This is not intended to be the complete Atlas Cloud catalog. If the user asks for a model not listed locally, check the current Atlas Cloud model page/API tab before adding it.
 

@@ -19,6 +19,10 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "CoFlow",
+    "brandColor": "#2f2d2a",
+    "logo": "./assets/coflow-logo.png",
+    "logoDark": "./assets/coflow-logo.png",
+    "composerIcon": "./assets/coflow-logo.png",
     "shortDescription": "Open a canvas, generate or edit images/videos from frames and annotations, and write results back with lineage.",
     "longDescription": "CoFlow keeps the whiteboard as visual context and writeback surface. Codex skills decide image/video/3D workflow modes, call real providers, and insert results back onto the canvas with local assets, lineage, and metadata.",
     "developerName": "CoFlow contributors",
@@ -32,10 +36,7 @@
     "defaultPrompt": [
       "Open CoFlow.",
       "View or change CoFlow provider/model defaults.",
-      "Generate an image on the canvas.",
-      "Edit the selected image according to the frame annotations.",
-      "Generate a video from the selected frame or prompt.",
-      "Prepare a 3D generation workflow from the selected references."
+      "Generate or edit selected canvas media."
     ]
   },
   "mcpServers": "./.mcp.json"
