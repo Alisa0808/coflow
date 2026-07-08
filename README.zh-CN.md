@@ -73,7 +73,7 @@ coflow/lib/                       # provider/runtime helper
 coflow/tests/                     # 回归测试
 ```
 
-生成资产和本地运行状态存储在 `.coflow/`，该目录已被 git 忽略。
+生成资产和本地运行状态存储在当前 workspace 的 `.coflow/`，该目录已被 git 忽略。
 
 ## 快速开始
 

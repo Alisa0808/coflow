@@ -73,7 +73,7 @@ coflow/lib/                       # provider/runtime helpers
 coflow/tests/                     # regression tests
 ```
 
-생성 에셋과 로컬 런타임 상태는 `.coflow/` 아래 저장되며 git에서 무시됩니다.
+생성 에셋과 로컬 런타임 상태는 현재 workspace의 `.coflow/` 아래 저장되며 git에서 무시됩니다.
 
 ## Quick Start
 

@@ -73,7 +73,7 @@ coflow/lib/                       # provider/runtime helpers
 coflow/tests/                     # regression tests
 ```
 
-生成アセットとローカル実行状態は `.coflow/` に保存され、git では無視されます。
+生成アセットとローカル実行状態は現在の workspace の `.coflow/` に保存され、git では無視されます。
 
 ## Quick Start
 

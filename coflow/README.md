@@ -172,7 +172,7 @@ When multiple possible source assets are visible and none is selected or framed,
 Generated media and metadata are local-first under:
 
 ```text
-coflow/.coflow/
+<current-workspace>/.coflow/
 ```
 
 This directory is ignored by git. It may contain uploaded assets, generated outputs, execution snapshots, and operation logs.

@@ -6,14 +6,15 @@ import { getProviderStatus } from './lib/provider-config.mjs'
 import { buildProviderOnboarding } from './lib/provider-onboarding.mjs'
 import { readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
 import { buildCanvasManifest, mergeCanvasDocuments } from './lib/canvas-document-store.mjs'
+import { resolveRuntimePaths } from './lib/runtime-paths.mjs'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 const distRoot = join(root, 'dist')
-const workspaceRoot = process.env.WORKSPACE_ROOT || join(root, '..')
-const STORE_DIR = '.coflow'
-const LEGACY_STORE_DIR = `.${['codex', 'media', 'canvas'].join('-')}`
-const storeRoot = join(workspaceRoot, STORE_DIR)
-const legacyStoreRoot = join(workspaceRoot, LEGACY_STORE_DIR)
+const runtimePaths = resolveRuntimePaths({ root })
+const workspaceRoot = runtimePaths.workspaceRoot
+const STORE_DIR = runtimePaths.storeDir
+const storeRoot = runtimePaths.storeRoot
+const legacyStoreRoot = runtimePaths.legacyStoreRoot
 const metadataRoot = join(storeRoot, 'metadata')
 const logsRoot = join(storeRoot, 'logs')
 const commandsRoot = join(storeRoot, 'commands')
@@ -733,6 +734,7 @@ function getRuntimeInfo() {
     root,
     workspaceRoot,
     storeDir: STORE_DIR,
+    storageSource: runtimePaths.storageSource,
     storeRoot,
     legacyStoreRoot,
     metadataRoot,

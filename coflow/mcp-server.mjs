@@ -9,14 +9,16 @@ import { prepareProviderExecution } from './lib/provider-executor.mjs'
 import { buildProviderOnboarding } from './lib/provider-onboarding.mjs'
 import { getDefaultProviderForMedia, readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
 import { validateAtlasVideoRequest } from './lib/atlas-video-models.mjs'
+import { resolveRuntimePaths } from './lib/runtime-paths.mjs'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 const execFileAsync = promisify(execFile)
-const workspaceRoot = process.env.WORKSPACE_ROOT || join(root, '..')
-const STORE_DIR = '.coflow'
-const LEGACY_STORE_DIR = `.${['codex', 'media', 'canvas'].join('-')}`
-const storeRoot = join(workspaceRoot, STORE_DIR)
-const legacyStoreRoot = join(workspaceRoot, LEGACY_STORE_DIR)
+const runtimePaths = resolveRuntimePaths({ root })
+const workspaceRoot = runtimePaths.workspaceRoot
+const STORE_DIR = runtimePaths.storeDir
+const LEGACY_STORE_DIR = runtimePaths.legacyStoreDir
+const storeRoot = runtimePaths.storeRoot
+const legacyStoreRoot = runtimePaths.legacyStoreRoot
 const latestSelectionPath = join(storeRoot, 'metadata', 'latest-selection.json')
 const latestFrameContextPath = join(storeRoot, 'metadata', 'latest-frame-context.json')
 const latestCodexFrameRequestPath = join(storeRoot, 'metadata', 'latest-codex-frame-request.json')
@@ -1424,6 +1426,7 @@ function createLocalCanvasRuntime() {
     root,
     workspaceRoot: normalize(workspaceRoot),
     storeDir: STORE_DIR,
+    storageSource: runtimePaths.storageSource,
     storeRoot: normalize(storeRoot),
     legacyStoreRoot: normalize(legacyStoreRoot),
     metadataRoot: normalize(metadataRoot),

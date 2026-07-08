@@ -73,7 +73,7 @@ coflow/lib/                       # provider/runtime helpers
 coflow/tests/                     # regression tests
 ```
 
-Generated assets and local runtime state are stored under `.coflow/` and are ignored by git.
+Generated assets and local runtime state are stored under the current workspace's `.coflow/` and are ignored by git.
 
 ## Quick Start
 

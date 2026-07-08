@@ -13,25 +13,39 @@ http://127.0.0.1:5176/
 
 ## Workflow
 
-1. Fast path first: if `http://127.0.0.1:5176/` is already reachable, reuse it immediately.
+1. Determine the desired workspace root first.
 
-   Do not inspect canvas content, provider onboarding, selection state, or page identity on the normal fast path. Opening the board should only confirm that the local service exists and then hand the URL to the Codex in-app browser.
+   Use the current Codex thread working directory as the workspace root. This is where CoFlow should store the board at `.coflow/`. Do not use the installed plugin cache directory as the workspace root.
 
-2. If port `5176` is not reachable, start the local service from the installed plugin root.
+2. Fast path: if `http://127.0.0.1:5176/` is already reachable, read `http://127.0.0.1:5176/api/runtime`.
+
+   Reuse the running service only when `runtime.workspaceRoot` matches the desired workspace root.
+
+   Do not inspect canvas content, provider onboarding, selection state, or page identity on the normal fast path. Runtime inspection is only to avoid opening the wrong workspace board.
+
+   If the running service belongs to a different workspace, tell the user that CoFlow is already running for another workspace and needs a restart before opening the current workspace board. Do not pretend that the blank/wrong board is the current workspace board.
+
+3. If port `5176` is not reachable, start the local service from the installed plugin root.
 
    The plugin root is the directory that contains this plugin's `package.json`, `server.mjs`, and `skills/` folder. Do not use or show a developer checkout path.
 
-   Run the service from that installed plugin root with `npm run serve`.
+   Run the service from that installed plugin root with `WORKSPACE_ROOT` set to the current Codex thread working directory:
 
-   If port `5176` is already in use, do not start a second server. Use the existing canvas URL.
+   ```bash
+   WORKSPACE_ROOT=<current-codex-thread-cwd> npm run serve
+   ```
 
-3. When the skill is used inside Codex, open or focus the canvas URL in the Codex in-app browser by default.
+   This keeps user board data in the current workspace's `.coflow/` directory instead of the plugin cache.
+
+   If port `5176` becomes occupied while starting, re-check `/api/runtime`. Reuse the existing canvas URL only if it matches the desired workspace root; otherwise report the workspace mismatch.
+
+4. When the skill is used inside Codex, open or focus the canvas URL in the Codex in-app browser by default.
 
    Do not use Puppeteer, the Chrome plugin, `open`, or any external system browser for the default Codex workflow. Those tools control an external browser and are not equivalent to the Codex in-app browser.
 
    If Codex in-app browser control is unavailable in the current session, keep the local service running and return the local URL as the fallback. Tell the user to open it in the Codex in-app browser instead of opening Chrome yourself.
 
-4. Provider onboarding is deferred by default.
+5. Provider onboarding is deferred by default.
 
    Do not block opening the board on `canvas.get_provider_onboarding`. Read it only when:
 
@@ -46,7 +60,7 @@ http://127.0.0.1:5176/
    - If setup is already `configured`, do not interrupt the user; just open the board.
    - If setup was `skipped`, do not nag on every open. Mention that provider setup can be rerun only when the user asks about provider/model settings or generation fails.
 
-5. Do not seed example content automatically. The default board should be the user's saved local canvas or a blank board.
+6. Do not seed example content automatically. The default board should be the user's saved local canvas or a blank board.
 
 ## User-facing behavior
 
