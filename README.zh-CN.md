@@ -2,9 +2,7 @@
 
 CoFlow 是面向 Codex 的 agent-native 媒体画布。
 
-语言：[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
-
-Skill 文档：[English](docs/skills/README.md) | [简体中文](docs/skills/README.zh-CN.md) | [日本語](docs/skills/README.ja.md) | [한국어](docs/skills/README.ko.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
 它把无限 tldraw 白板、Codex skills 和 MCP 工具连接起来：你可以在画布上指向视觉上下文，描述要改什么，生成新的图片或视频，并把结果作为本地资产和可追踪版本写回画布。
 

@@ -2,9 +2,7 @@
 
 CoFlow is an agent-native media canvas for Codex.
 
-Languages: [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
-
-Skill docs: [English](docs/skills/README.md) | [简体中文](docs/skills/README.zh-CN.md) | [日本語](docs/skills/README.ja.md) | [한국어](docs/skills/README.ko.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
 It combines an infinite tldraw whiteboard with Codex skills and MCP tools so you can point at visual context, describe the change, generate a new image or video, and write the result back onto the canvas with local assets and version lineage.
 
