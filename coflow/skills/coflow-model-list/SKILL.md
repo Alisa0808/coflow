@@ -65,6 +65,7 @@ Image model families may include these CoFlow-configured models when present in 
 - Nano Banana 2
 - Nano Banana 2 Lite
 - Nano Banana Pro
+- Seedream 5.0 Pro
 - Seedream 5.0 Lite
 - Seedream 4.5
 - Wan 2.7
