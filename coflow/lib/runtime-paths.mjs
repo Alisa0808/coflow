@@ -1,5 +1,5 @@
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 export const STORE_DIR = '.coflow'
 export const LEGACY_STORE_DIR = `.${['codex', 'media', 'canvas'].join('-')}`
@@ -54,6 +54,21 @@ export function resolveRuntimePaths(options = {}) {
   })
 }
 
+export function resolveLocalEnvPaths({ root, workspaceRoot }) {
+  const resolvedRoot = resolve(root)
+  const resolvedWorkspaceRoot = resolve(workspaceRoot)
+  const paths = [
+    join(resolvedWorkspaceRoot, '.env.local'),
+    join(resolvedRoot, '.env.local'),
+  ]
+
+  const pluginConfigRoot = codexPluginConfigRoot(resolvedRoot)
+  if (pluginConfigRoot) paths.push(join(pluginConfigRoot, '.env.local'))
+
+  paths.push(join(resolvedWorkspaceRoot, '.env'))
+  return uniquePaths(paths)
+}
+
 function buildRuntimePaths({ root, workspaceRoot, storeRoot, legacyStoreRoot, storageSource }) {
   return {
     root,
@@ -72,4 +87,13 @@ function firstNonEmpty(...values) {
 
 function isCodexPluginCacheRoot(path) {
   return path.includes('/.codex/plugins/cache/')
+}
+
+function codexPluginConfigRoot(path) {
+  if (!isCodexPluginCacheRoot(path)) return undefined
+  return dirname(path)
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths)]
 }

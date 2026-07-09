@@ -6,7 +6,7 @@ import { getProviderStatus } from './lib/provider-config.mjs'
 import { buildProviderOnboarding } from './lib/provider-onboarding.mjs'
 import { readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
 import { buildCanvasManifest, mergeCanvasDocuments } from './lib/canvas-document-store.mjs'
-import { resolveRuntimePaths } from './lib/runtime-paths.mjs'
+import { resolveLocalEnvPaths, resolveRuntimePaths } from './lib/runtime-paths.mjs'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 const distRoot = join(root, 'dist')
@@ -43,7 +43,7 @@ const operationsLogPath = join(logsRoot, 'operations.jsonl')
 const pendingCommandsPath = join(commandsRoot, 'pending.jsonl')
 const CANVAS_CLIENT_VERSION = '2026-06-27-native-media-writeback-v1'
 
-await loadLocalEnv([join(workspaceRoot, '.env.local'), join(root, '.env.local'), join(workspaceRoot, '.env')])
+await loadLocalEnv(resolveLocalEnvPaths({ root, workspaceRoot }))
 
 const port = Number(process.env.PORT || 5176)
 

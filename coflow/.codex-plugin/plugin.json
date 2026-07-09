@@ -1,6 +1,6 @@
 {
   "name": "coflow",
-  "version": "0.2.0+codex.20260709112822",
+  "version": "0.2.0+codex.20260709230858",
   "description": "A Codex-driven media canvas for image and video generation/editing from whiteboard selection, frames, and annotations.",
   "author": {
     "name": "CoFlow contributors"

@@ -9,7 +9,7 @@ import { prepareProviderExecution } from './lib/provider-executor.mjs'
 import { buildProviderOnboarding } from './lib/provider-onboarding.mjs'
 import { getDefaultProviderForMedia, readProviderSettings, writeProviderSettings } from './lib/provider-settings.mjs'
 import { validateAtlasVideoRequest } from './lib/atlas-video-models.mjs'
-import { resolveRuntimePaths } from './lib/runtime-paths.mjs'
+import { resolveLocalEnvPaths, resolveRuntimePaths } from './lib/runtime-paths.mjs'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 const execFileAsync = promisify(execFile)
@@ -37,7 +37,7 @@ const CANVAS_RUNTIME_TIMEOUT_MS = Number(process.env.COFLOW_RUNTIME_TIMEOUT_MS |
 const FRESH_SELECTION_TIMEOUT_MS = 4500
 const FRESH_SELECTION_POLL_MS = 180
 
-await loadLocalEnv([join(workspaceRoot, '.env.local'), join(root, '.env.local'), join(workspaceRoot, '.env')])
+await loadLocalEnv(resolveLocalEnvPaths({ root, workspaceRoot }))
 await migrateLegacyStore()
 
 const tools = [
@@ -833,7 +833,6 @@ async function loadLocalEnv(paths) {
       process.env[key] = stripEnvQuotes(rawValue.trim())
     }
 
-    return
   }
 }
 

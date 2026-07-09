@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { resolveRuntimePaths } from '../lib/runtime-paths.mjs'
+import { resolveLocalEnvPaths, resolveRuntimePaths } from '../lib/runtime-paths.mjs'
 
 test('resolveRuntimePaths stores board data under explicit WORKSPACE_ROOT', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'coflow-runtime-paths-'))
@@ -84,6 +84,44 @@ test('resolveRuntimePaths lets COFLOW_STORE_ROOT override the computed store loc
     assert.equal(paths.workspaceRoot, workspaceRoot)
     assert.equal(paths.storeRoot, storeRoot)
     assert.equal(paths.storageSource, 'store-root-env')
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('resolveLocalEnvPaths includes stable plugin config beside versioned cache roots', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'coflow-runtime-paths-'))
+  const workspaceRoot = join(tempRoot, 'project')
+  const pluginFamilyRoot = join(tempRoot, '.codex/plugins/cache/personal/coflow')
+  const pluginRoot = join(pluginFamilyRoot, '0.2.0+test')
+
+  try {
+    const paths = resolveLocalEnvPaths({ root: pluginRoot, workspaceRoot })
+
+    assert.deepEqual(paths, [
+      join(workspaceRoot, '.env.local'),
+      join(pluginRoot, '.env.local'),
+      join(pluginFamilyRoot, '.env.local'),
+      join(workspaceRoot, '.env'),
+    ])
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('resolveLocalEnvPaths keeps checkout env lookup scoped to workspace and runtime roots', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'coflow-runtime-paths-'))
+  const workspaceRoot = join(tempRoot, 'coding-agent-canva')
+  const runtimeRoot = join(workspaceRoot, 'coflow')
+
+  try {
+    const paths = resolveLocalEnvPaths({ root: runtimeRoot, workspaceRoot })
+
+    assert.deepEqual(paths, [
+      join(workspaceRoot, '.env.local'),
+      join(runtimeRoot, '.env.local'),
+      join(workspaceRoot, '.env'),
+    ])
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }

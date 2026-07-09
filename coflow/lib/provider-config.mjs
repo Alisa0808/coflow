@@ -42,7 +42,7 @@ export const ATLAS_CLOUD_MODEL_CATALOG = {
       mode: 'image_edit',
     },
     {
-      id: 'bytedance/seedream-v5.0-pro',
+      id: 'bytedance/seedream-v5.0-pro/text-to-image',
       label: 'Seedream 5.0 Pro Text-to-Image',
       provider: 'ByteDance',
       mode: 'text_to_image',

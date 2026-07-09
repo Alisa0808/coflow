@@ -34,7 +34,7 @@ test('getProviderStatus reports Atlas Cloud defaults without exposing credential
   assert.equal(status.providers.atlas.models.videoReference, 'bytedance/seedance-2.0/reference-to-video')
   assert.ok(status.providers.atlas.modelCatalog.image.some((model) => model.id === 'google/nano-banana-2/edit'))
   assert.ok(status.providers.atlas.modelCatalog.image.some((model) => model.id === 'google/nano-banana-2-lite/edit'))
-  assert.ok(status.providers.atlas.modelCatalog.image.some((model) => model.id === 'bytedance/seedream-v5.0-pro'))
+  assert.ok(status.providers.atlas.modelCatalog.image.some((model) => model.id === 'bytedance/seedream-v5.0-pro/text-to-image'))
   assert.ok(status.providers.atlas.modelCatalog.image.some((model) => model.id === 'bytedance/seedream-v5.0-pro/edit'))
   assert.ok(status.providers.atlas.modelCatalog.image.some((model) => model.id === 'bytedance/seedream-v4.5/edit'))
   assert.ok(status.providers.atlas.modelCatalog.image.some((model) => model.id === 'alibaba/wan-2.7/text-to-image'))
