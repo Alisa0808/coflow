@@ -4,7 +4,7 @@ Updated: 2026-06-28
 
 ## Verdict
 
-Phase 2 is now scoped as plugin/productization plus scene-skill expansion on top of the Phase 1 RC generation loop.
+Phase 2 is now scoped as plugin/productization on top of the Phase 1 RC generation loop. Scene-skill expansion is deferred until the workflows are product-validated.
 
 The core product shape remains unchanged:
 
@@ -30,15 +30,7 @@ Core skills:
 - `coflow-video`
 - `coflow-provider-setup`
 
-Experimental scene workflow skill candidates:
-
-- `coflow-product-marketing`
-- `coflow-social-repurpose`
-- `coflow-video-ad-keyframes`
-- `coflow-style-exploration`
-- `coflow-3d`
-
-The core product entry remains the open/image/video/provider setup skill set. Scene workflow candidates should not be default-promoted until their flows are product-validated.
+Scene workflow candidates are intentionally not shipped yet. The core product entry remains the open/image/video/provider setup/model-list skill set.
 
 ### 2. Provider setup/status boundary
 
@@ -83,17 +75,9 @@ Added `coflow/README.md` covering:
 - local storage path;
 - tldraw schema-first development rule.
 
-### 4. 3D capability boundary
+### 4. Deferred scene and 3D capability boundary
 
-Added a first `coflow-3d` skill.
-
-Important: this does not claim full 3D editing or a native 3D viewer shape yet. It defines the correct workflow boundary:
-
-- read image/video/frame/3D references from canvas context;
-- generate or revise a 3D asset through Codex/provider;
-- save `.glb`, `.gltf`, `.obj`, or provider output locally;
-- write back a thumbnail or preview when native 3D display is not available;
-- preserve 3D asset path and metadata.
+Scene-specific and 3D skills are not part of the shipped plugin yet. They should stay out of the installed skill surface until the workflows are implemented and product-validated.
 
 ## Still not Phase 2 complete until validated by the main UI branch
 

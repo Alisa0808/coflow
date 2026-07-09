@@ -131,60 +131,7 @@ Important behavior:
 
 ## Scenario Skills
 
-### `coflow-product-marketing`
-
-Create product marketing images or campaign variants from selected assets.
-
-Good for:
-
-- product ad variants;
-- ecommerce hero images;
-- social campaign creatives;
-- comparing several visual directions.
-
-### `coflow-social-repurpose`
-
-Adapt selected media into social aspect ratios.
-
-Good for:
-
-- 1:1 feed posts;
-- 9:16 stories, Reels, Shorts, TikTok;
-- 16:9 YouTube or landscape placements;
-- keeping one source concept consistent across formats.
-
-### `coflow-video-ad-keyframes`
-
-Plan or generate video ad keyframes.
-
-Good for:
-
-- storyboard direction;
-- hook/middle/end structure;
-- product reveal sequences;
-- video ad planning before generation.
-
-### `coflow-style-exploration`
-
-Explore multiple visual styles from the same source.
-
-Good for:
-
-- brand direction exploration;
-- mood/style variants;
-- comparing visual treatments before choosing one.
-
-### `coflow-3d`
-
-Define the early 3D workflow boundary.
-
-Good for:
-
-- collecting references for future 3D generation;
-- describing 3D intent from canvas context;
-- preparing a 3D generation workflow.
-
-The current project does not claim full 3D canvas preview/editing yet.
+Scenario-specific skills are intentionally not shipped yet. CoFlow currently exposes only the core canvas, image, video, provider setup, and model list skills.
 
 ## Writeback Rules
 

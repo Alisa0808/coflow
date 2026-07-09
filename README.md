@@ -133,14 +133,6 @@ Core plugin skills:
 - `coflow-image` handles image generation and image editing from canvas context.
 - `coflow-video` handles text-to-video and reference/video revision workflows.
 
-Scenario skills:
-
-- `coflow-product-marketing`
-- `coflow-social-repurpose`
-- `coflow-video-ad-keyframes`
-- `coflow-style-exploration`
-- `coflow-3d`
-
 ## Development Checks
 
 Run from `coflow/`:

@@ -133,14 +133,6 @@ API key를 commit하거나 채팅에 붙여넣지 마세요.
 - `coflow-image`는 캔버스 컨텍스트에서 이미지 생성과 이미지 편집을 처리합니다.
 - `coflow-video`는 text-to-video와 reference/video revision workflow를 처리합니다.
 
-시나리오 skills:
-
-- `coflow-product-marketing`
-- `coflow-social-repurpose`
-- `coflow-video-ad-keyframes`
-- `coflow-style-exploration`
-- `coflow-3d`
-
 ## 개발 체크
 
 `coflow/`에서 실행:

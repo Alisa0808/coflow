@@ -131,60 +131,7 @@ reference-to-video 应该用哪个模型？
 
 ## 场景 Skills
 
-### `coflow-product-marketing`
-
-基于选中素材生成产品营销图或 campaign variants。
-
-适合：
-
-- 产品广告变体；
-- 电商 hero 图；
-- 社媒 campaign 素材；
-- 对比多个视觉方向。
-
-### `coflow-social-repurpose`
-
-把选中媒体适配到社交平台比例。
-
-适合：
-
-- 1:1 feed；
-- 9:16 Stories、Reels、Shorts、TikTok；
-- 16:9 YouTube 或横版投放；
-- 让一个源概念在多个格式中保持一致。
-
-### `coflow-video-ad-keyframes`
-
-规划或生成视频广告关键帧。
-
-适合：
-
-- 分镜方向；
-- hook/middle/end 结构；
-- 产品 reveal sequence；
-- 视频生成前的广告规划。
-
-### `coflow-style-exploration`
-
-基于同一个源素材探索多个视觉风格。
-
-适合：
-
-- 品牌视觉方向探索；
-- mood/style variants；
-- 在选择前比较不同视觉处理。
-
-### `coflow-3d`
-
-定义早期 3D 工作流边界。
-
-适合：
-
-- 收集未来 3D 生成所需 reference；
-- 从画布上下文描述 3D 意图；
-- 准备 3D generation workflow。
-
-当前项目暂不宣称完整 3D 画布预览/编辑。
+场景类 skills 暂不随插件发布。当前 CoFlow 只暴露画布、图片、视频、provider setup 和 model list 这些核心 skills。
 
 ## 写回规则
 

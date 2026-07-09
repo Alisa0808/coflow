@@ -1,6 +1,6 @@
 # CoFlow
 
-CoFlow is an agent-native tldraw canvas for generating and revising images, videos, and future 3D assets from visual context.
+CoFlow is an agent-native tldraw canvas for generating and revising images and videos from visual context.
 
 The canvas is not a provider form. It is the visual surface for:
 
@@ -19,10 +19,7 @@ This branch contains:
   - provider/model setup and redacted provider diagnostics;
   - provider default settings stored outside the canvas document;
   - image and video skills;
-  - first 3D workflow boundary;
   - local-first open-source setup docs.
-
-Full 3D canvas preview/editing is not claimed yet. The current 3D skill defines the workflow contract and local asset boundary; a dedicated 3D viewer shape is a later product feature.
 
 ## Quick start
 
@@ -117,13 +114,7 @@ Core skills:
 - `coflow-video` — text-to-video, reference-to-video, and video regeneration/keyframe-guided revision; it decides the mode from canvas context.
 - `coflow-provider-setup` — view/change image and video provider/model defaults, skip or rerun setup, and diagnose provider runtime failures.
 
-Additional scenario skills:
-
-- `coflow-product-marketing` — product/ad/social marketing variants.
-- `coflow-social-repurpose` — 1:1, 9:16, and 16:9 social adaptations.
-- `coflow-video-ad-keyframes` — storyboard/keyframe planning for video ads.
-- `coflow-style-exploration` — multiple visual style directions.
-- `coflow-3d` — first 3D generation/revision workflow boundary.
+Scenario-specific skills are intentionally not shipped yet.
 
 ## CoFlow writeback contract
 

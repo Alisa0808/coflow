@@ -131,60 +131,7 @@ Regenerate this video with softer motion.
 
 ## Scenario Skills
 
-### `coflow-product-marketing`
-
-선택한 assets에서 product marketing images 또는 campaign variants를 만듭니다.
-
-좋은 용도:
-
-- product ad variants;
-- ecommerce hero images;
-- social campaign creatives;
-- 여러 visual directions 비교.
-
-### `coflow-social-repurpose`
-
-선택 미디어를 social aspect ratios로 변환합니다.
-
-좋은 용도:
-
-- 1:1 feed posts;
-- 9:16 stories, Reels, Shorts, TikTok;
-- 16:9 YouTube 또는 landscape placements;
-- 하나의 source concept를 여러 format에서 일관되게 유지.
-
-### `coflow-video-ad-keyframes`
-
-video ad keyframes를 계획하거나 생성합니다.
-
-좋은 용도:
-
-- storyboard direction;
-- hook/middle/end structure;
-- product reveal sequences;
-- 비디오 생성 전 광고 기획.
-
-### `coflow-style-exploration`
-
-같은 source에서 여러 visual styles를 탐색합니다.
-
-좋은 용도:
-
-- brand direction exploration;
-- mood/style variants;
-- 선택 전 visual treatments 비교.
-
-### `coflow-3d`
-
-초기 3D workflow boundary를 정의합니다.
-
-좋은 용도:
-
-- 향후 3D generation을 위한 references 수집;
-- 캔버스 컨텍스트에서 3D intent 설명;
-- 3D generation workflow 준비.
-
-현재 프로젝트는 full 3D canvas preview/editing을 제공한다고 주장하지 않습니다.
+시나리오별 skills는 아직 plugin에 포함하지 않습니다. 현재 CoFlow는 canvas, image, video, provider setup, model list 핵심 skills만 노출합니다.
 
 ## Writeback Rules
 

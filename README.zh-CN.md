@@ -133,14 +133,6 @@ coflow/.env.local
 - `coflow-image` 从画布上下文执行图片生成和图片编辑。
 - `coflow-video` 执行 text-to-video 和 reference/video revision。
 
-场景 skills：
-
-- `coflow-product-marketing`
-- `coflow-social-repurpose`
-- `coflow-video-ad-keyframes`
-- `coflow-style-exploration`
-- `coflow-3d`
-
 ## 开发检查
 
 在 `coflow/` 下运行：
