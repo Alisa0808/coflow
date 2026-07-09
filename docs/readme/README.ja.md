@@ -2,7 +2,7 @@
 
 CoFlow は Codex 向けの agent-native メディアキャンバスです。
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+[English](../../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
 無限 tldraw ホワイトボード、Codex skills、MCP tools をつなぎ、視覚コンテキストを指し示して変更内容を伝え、新しい画像や動画を生成し、ローカル資産とバージョン履歴つきでキャンバスへ戻せます。
 
