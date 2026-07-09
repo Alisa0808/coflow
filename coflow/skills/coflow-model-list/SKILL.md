@@ -61,7 +61,7 @@ CoFlow ships with:
 
 Image model families may include these CoFlow-configured models when present in `canvas.get_provider_status`:
 
-- GPT image 2
+- GPT Image 2
 - Nano Banana 2
 - Nano Banana 2 Lite
 - Nano Banana Pro

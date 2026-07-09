@@ -218,6 +218,7 @@ CoFlow ships with a small verified built-in Atlas Cloud model catalog so users c
 
 Built-in Atlas Cloud image model families currently include:
 
+- GPT Image 2;
 - Nano Banana 2;
 - Nano Banana 2 Lite;
 - Nano Banana Pro;

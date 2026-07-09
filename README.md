@@ -6,6 +6,12 @@ CoFlow is an agent-native media canvas for Codex.
 
 It combines an infinite tldraw whiteboard with Codex skills and MCP tools so you can point at visual context, describe the change, generate a new image or video, and write the result back onto the canvas with local assets and version lineage.
 
+## Design Philosophy
+
+CoFlow starts from a simple premise: pair Codex, one of the strongest AI agents available to developers today, with an infinite whiteboard canvas.
+
+Codex provides the execution harness: it reads bounded visual context, turns open-ended intent into actionable prompts, chooses the right model and provider route, saves generated assets locally, and writes results back with lineage. The canvas preserves the free-form side of creative work: spatial thinking, references, annotations, alternate versions, and branching ideas, without reducing the workflow to a rigid form or provider panel.
+
 ## What CoFlow Is
 
 CoFlow is not a provider form, a lightweight Canva clone, or a static image board.
@@ -122,6 +128,39 @@ coflow/.env.local
 ```
 
 Do not commit API keys or paste secrets into chat.
+
+## Supported Models
+
+CoFlow uses friendly model names in user-facing docs and skills. Internal provider model ids stay in runtime configuration and diagnostics.
+
+Defaults:
+
+- Image generation/editing: Codex built-in GPT Image 2
+- Video generation/editing: Atlas Cloud Seedance 2.0
+
+Atlas Cloud image options:
+
+- GPT Image 2
+- Nano Banana 2
+- Nano Banana 2 Lite
+- Nano Banana Pro
+- Seedream 5.0 Pro
+- Seedream 5.0 Lite
+- Seedream 4.5
+- Wan 2.7
+- Grok Imagine Image
+- Qwen Image 2.0
+
+Atlas Cloud video options:
+
+- Seedance 2.0
+- Seedance 2.0 Mini
+- Kling V3.0 Turbo / Standard / Pro / 4K
+- Kling O3 Standard / Pro / 4K
+- Wan 2.7
+- HappyHorse 1.1
+- Grok Imagine Video
+- Grok Imagine Video v1.5
 
 ## Codex Skills
 

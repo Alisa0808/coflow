@@ -6,6 +6,12 @@ CoFlow는 Codex를 위한 agent-native 미디어 캔버스입니다.
 
 무한 tldraw 화이트보드, Codex skills, MCP tools를 연결해 시각적 컨텍스트를 가리키고, 원하는 변경을 설명하고, 새 이미지나 비디오를 생성한 뒤 로컬 에셋과 버전 계보를 함께 캔버스에 다시 넣을 수 있습니다.
 
+## Design Idea
+
+CoFlow의 출발점은 단순합니다. 개발자가 사용할 수 있는 가장 강력한 Agent 중 하나인 Codex를 무한 화이트보드 캔버스와 결합합니다.
+
+Codex는 harness를 담당합니다. 경계가 있는 시각 컨텍스트를 읽고, prompt를 구성하고, 적절한 model/provider route를 선택하고, 로컬 asset을 만들고, lineage와 함께 결과를 다시 씁니다. 캔버스는 창작의 발산적 자유를 보존합니다. reference, 주석, 대안 버전, 아이디어 분기를 공간적으로 다룰 수 있고 모든 것을 form에 밀어 넣을 필요가 없습니다.
+
 ## CoFlow란
 
 CoFlow는 provider 입력 폼도, 가벼운 Canva 클론도, 정적인 이미지 보드도 아닙니다.
@@ -122,6 +128,39 @@ coflow/.env.local
 ```
 
 API key를 commit하거나 채팅에 붙여넣지 마세요.
+
+## Supported Models
+
+CoFlow는 사용자용 docs와 skills에서 읽기 쉬운 공식 모델명을 사용합니다. 내부 provider model id는 runtime config와 diagnostics에만 남깁니다.
+
+기본값:
+
+- 이미지 생성/편집: Codex built-in GPT Image 2
+- 비디오 생성/편집: Atlas Cloud Seedance 2.0
+
+Atlas Cloud 이미지 모델:
+
+- GPT Image 2
+- Nano Banana 2
+- Nano Banana 2 Lite
+- Nano Banana Pro
+- Seedream 5.0 Pro
+- Seedream 5.0 Lite
+- Seedream 4.5
+- Wan 2.7
+- Grok Imagine Image
+- Qwen Image 2.0
+
+Atlas Cloud 비디오 모델:
+
+- Seedance 2.0
+- Seedance 2.0 Mini
+- Kling V3.0 Turbo / Standard / Pro / 4K
+- Kling O3 Standard / Pro / 4K
+- Wan 2.7
+- HappyHorse 1.1
+- Grok Imagine Video
+- Grok Imagine Video v1.5
 
 ## Codex Skills
 

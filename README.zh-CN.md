@@ -6,6 +6,12 @@ CoFlow 是面向 Codex 的 agent-native 媒体画布。
 
 它把无限 tldraw 白板、Codex skills 和 MCP 工具连接起来：你可以在画布上指向视觉上下文，描述要改什么，生成新的图片或视频，并把结果作为本地资产和可追踪版本写回画布。
 
+## 设计理念
+
+CoFlow 的出发点很简单：用最强的 Agent 之一 Codex 来驱动无限画布白板。
+
+Codex 提供可控的 harness：读取有边界的视觉上下文、组织 prompt、选择合适的模型/provider 路径、落本地资产、把结果带着版本关系写回画布。白板保留创作里发散自由的一面：空间化摆放 reference、标注、备选版本和灵感分支，而不是把所有东西都塞进表单。
+
 ## CoFlow 是什么
 
 CoFlow 不是 provider 表单，不是轻量版 Canva，也不是静态图片板。
@@ -122,6 +128,39 @@ coflow/.env.local
 ```
 
 不要提交 API key，也不要把密钥粘贴到聊天里。
+
+## 支持模型
+
+CoFlow 在面向用户的文档和 skills 里使用友好的官方模型名。内部 provider model id 只保留在运行配置和诊断信息里。
+
+默认模型：
+
+- 图片生成/编辑：Codex 内置 GPT Image 2
+- 视频生成/编辑：Atlas Cloud Seedance 2.0
+
+Atlas Cloud 图片模型：
+
+- GPT Image 2
+- Nano Banana 2
+- Nano Banana 2 Lite
+- Nano Banana Pro
+- Seedream 5.0 Pro
+- Seedream 5.0 Lite
+- Seedream 4.5
+- Wan 2.7
+- Grok Imagine Image
+- Qwen Image 2.0
+
+Atlas Cloud 视频模型：
+
+- Seedance 2.0
+- Seedance 2.0 Mini
+- Kling V3.0 Turbo / Standard / Pro / 4K
+- Kling O3 Standard / Pro / 4K
+- Wan 2.7
+- HappyHorse 1.1
+- Grok Imagine Video
+- Grok Imagine Video v1.5
 
 ## Codex Skills
 
