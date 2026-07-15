@@ -230,6 +230,7 @@ function toAnnotationContext(shape) {
     shapeId: shape.id,
     type: shape.type,
     text: optionalStringProp(shape.props.text) ?? optionalStringProp(shape.props.plainText) ?? richText,
+    style: getAnnotationStyle(shape.props),
     bounds: getShapeBounds(shape),
   }
 }
@@ -280,8 +281,26 @@ function itemToAnnotationContext(item) {
     shapeId: item.id,
     type: item.canvasType === 'note' || item.canvasType === 'text' || item.canvasType === 'draw' || item.canvasType === 'arrow' ? item.canvasType : 'geo',
     text: item.text,
+    style: item.style,
     bounds: item.bounds,
   }
+}
+
+export function getAnnotationStyle(props) {
+  const style = {}
+  const color = optionalStringProp(props.color)
+  const fill = optionalStringProp(props.fill)
+  const dash = optionalStringProp(props.dash)
+  const size = optionalStringProp(props.size)
+  const opacity = optionalNumberProp(props.opacity)
+
+  if (color) style.color = color
+  if (fill) style.fill = fill
+  if (dash) style.dash = dash
+  if (size) style.size = size
+  if (opacity !== undefined) style.opacity = opacity
+
+  return Object.keys(style).length > 0 ? style : undefined
 }
 
 function unionBounds(boundsList) {
@@ -308,6 +327,10 @@ function stringProp(value, fallback) {
 
 function optionalStringProp(value) {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function optionalNumberProp(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function overlapArea(a, b) {

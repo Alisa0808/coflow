@@ -114,10 +114,27 @@ function annotationToPromptLine(annotation, frameBounds) {
 
   const bounds = annotation.bounds
   const region = describeRelativeRegion(bounds, frameBounds)
-  if (annotation.type === 'geo') return `A drawn geometric annotation marks the ${region} target region.`
-  if (annotation.type === 'arrow') return `An arrow annotation points toward the ${region} target region.`
-  if (annotation.type === 'draw') return `A freehand drawing annotation marks the ${region} target region.`
-  return `${annotation.type} annotation at the ${region} target region.`
+  const style = describeAnnotationStyle(annotation)
+  const prefix = style ? `${style} ` : ''
+  if (annotation.type === 'geo') return `A ${prefix}drawn geometric annotation marks the ${region} target region.`
+  if (annotation.type === 'arrow') return `A ${prefix}arrow annotation points toward the ${region} target region.`
+  if (annotation.type === 'draw') return `A ${prefix}freehand drawing annotation marks the ${region} target region.`
+  return `A ${prefix}${annotation.type} annotation marks the ${region} target region.`
+}
+
+function describeAnnotationStyle(annotation) {
+  const style = annotation.style
+  if (!style) return ''
+
+  const parts = [
+    style.color ? `${style.color} stroke` : undefined,
+    style.fill && style.fill !== 'none' ? `${style.fill} fill` : undefined,
+    style.dash ? `${style.dash} stroke style` : undefined,
+    style.size ? `${style.size} size` : undefined,
+    typeof style.opacity === 'number' ? `${Math.round(style.opacity * 100)}% opacity` : undefined,
+  ].filter(Boolean)
+
+  return parts.join(', ')
 }
 
 function describeRelativeRegion(bounds, frameBounds) {

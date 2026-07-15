@@ -30,7 +30,7 @@ test('extractFrameContext returns only shapes inside the task frame', () => {
           provider: 'imported',
         },
       },
-      { id: 'shape:box', type: 'geo', x: 120, y: 88, props: { w: 80, h: 60, text: 'clean this' } },
+      { id: 'shape:box', type: 'geo', x: 120, y: 88, props: { w: 80, h: 60, text: 'clean this', color: 'light-red', fill: 'none', dash: 'draw', size: 'm' } },
       { id: 'shape:outside', type: 'note', x: 640, y: 40, props: { w: 160, h: 160, text: 'ignore me' } },
     ],
     'frame:task',
@@ -41,6 +41,7 @@ test('extractFrameContext returns only shapes inside the task frame', () => {
   assert.equal(context.annotations.length, 1)
   assert.equal(context.anchorMedia?.assetId, 'asset:source')
   assert.equal(context.annotations[0].text, 'clean this')
+  assert.deepEqual(context.annotations[0].style, { color: 'light-red', fill: 'none', dash: 'draw', size: 'm' })
 })
 
 test('extractFrameContext treats native tldraw image shapes as media anchors', () => {
@@ -188,6 +189,49 @@ test('createGenerationContextFromSelection uses selected objects when no frame i
   assert.match(request.instructions.prompt, /make the right eye green/)
 })
 
+test('createGenerationContextFromSelection preserves selected draw annotation style', () => {
+  const context = createGenerationContextFromSelection({
+    version: 1,
+    selectedIds: ['shape:image', 'shape:draw'],
+    selectedItems: [
+      {
+        id: 'shape:image',
+        kind: 'image',
+        canvasType: 'image',
+        bounds: { x: 100, y: 120, w: 320, h: 240 },
+        asset: {
+          assetId: 'asset:image',
+          mediaType: 'image',
+          mimeType: 'image/png',
+          localPath: '.coflow/assets/images/source.png',
+        },
+      },
+      {
+        id: 'shape:draw',
+        kind: 'shape',
+        canvasType: 'draw',
+        bounds: { x: 180, y: 180, w: 80, h: 60 },
+        style: { color: 'light-red', dash: 'draw', size: 'm' },
+      },
+    ],
+    updatedAt: '2026-07-10T00:00:00.000Z',
+  })
+
+  assert.equal(context.annotations[0].type, 'draw')
+  assert.deepEqual(context.annotations[0].style, { color: 'light-red', dash: 'draw', size: 'm' })
+
+  const request = createProviderReadyGenerationRequest({
+    createdAt: '2026-07-10T00:00:00.000Z',
+    childShapeId: 'shape:child',
+    arrowShapeId: 'shape:arrow',
+    outputLocalPath: '.coflow/assets/images/output.png',
+    context,
+  })
+
+  assert.match(request.instructions.prompt, /light-red stroke/)
+  assert.match(request.instructions.prompt, /freehand drawing annotation/)
+})
+
 test('createGenerationContextFromSelection falls back to visible viewport items', () => {
   const context = createGenerationContextFromSelection({
     version: 1,
@@ -273,11 +317,13 @@ test('createProviderReadyGenerationRequest summarizes non-text geometric annotat
         bounds: { x: 80, y: 80, w: 320, h: 360 },
       },
       media: [],
-      annotations: [{ shapeId: 'shape:box', type: 'geo', bounds: { x: 160, y: 140, w: 280, h: 180 } }],
+      annotations: [{ shapeId: 'shape:box', type: 'geo', style: { color: 'light-red', fill: 'none', dash: 'dashed', size: 'm' }, bounds: { x: 160, y: 140, w: 280, h: 180 } }],
     },
   })
 
   assert.match(request.instructions.prompt, /drawn geometric annotation/)
+  assert.match(request.instructions.prompt, /light-red stroke/)
+  assert.match(request.instructions.prompt, /dashed stroke style/)
   assert.match(request.instructions.prompt, /target region/)
 })
 

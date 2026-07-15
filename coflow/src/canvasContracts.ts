@@ -29,10 +29,19 @@ export type MediaContext = {
   bounds: Bounds
 }
 
+export type AnnotationStyle = {
+  color?: string
+  fill?: string
+  dash?: string
+  size?: string
+  opacity?: number
+}
+
 export type AnnotationContext = {
   shapeId: string
   type: Exclude<CanvasShapeKind, 'media-image' | 'image' | 'video' | 'frame'>
   text?: string
+  style?: AnnotationStyle
   bounds: Bounds
 }
 
@@ -67,6 +76,7 @@ export type CanvasItem = {
   bounds: Bounds
   parentId?: string
   text?: string
+  style?: AnnotationStyle
   asset?: CanvasAssetContext
   metadata?: Record<string, unknown>
 }
@@ -336,6 +346,7 @@ function toAnnotationContext(shape: CanvasShapeRecord): AnnotationContext {
     shapeId: shape.id,
     type: shape.type as AnnotationContext['type'],
     text: optionalStringProp(shape.props.text) ?? optionalStringProp(shape.props.plainText) ?? richText,
+    style: getAnnotationStyle(shape.props),
     bounds: getShapeBounds(shape),
   }
 }
@@ -392,8 +403,26 @@ function itemToAnnotationContext(item: CanvasItem): AnnotationContext {
     shapeId: item.id,
     type: item.canvasType === 'note' || item.canvasType === 'text' || item.canvasType === 'draw' || item.canvasType === 'arrow' ? item.canvasType : 'geo',
     text: item.text,
+    style: item.style,
     bounds: item.bounds,
   }
+}
+
+export function getAnnotationStyle(props: Record<string, unknown>): AnnotationStyle | undefined {
+  const style: AnnotationStyle = {}
+  const color = optionalStringProp(props.color)
+  const fill = optionalStringProp(props.fill)
+  const dash = optionalStringProp(props.dash)
+  const size = optionalStringProp(props.size)
+  const opacity = optionalNumberProp(props.opacity)
+
+  if (color) style.color = color
+  if (fill) style.fill = fill
+  if (dash) style.dash = dash
+  if (size) style.size = size
+  if (opacity !== undefined) style.opacity = opacity
+
+  return Object.keys(style).length > 0 ? style : undefined
 }
 
 function unionBounds(boundsList: Bounds[]) {
@@ -420,6 +449,10 @@ function stringProp(value: unknown, fallback: string): string {
 
 function optionalStringProp(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function optionalNumberProp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function overlapArea(a: Bounds, b: Bounds) {

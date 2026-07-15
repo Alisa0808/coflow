@@ -22,6 +22,7 @@ import { buildBoundedFrameContextPromptPart } from './agentPromptParts'
 import {
   createVersionPlacement,
   extractFrameContext,
+  getAnnotationStyle,
   getShapeBounds,
   richTextToPlainText,
   type Bounds,
@@ -2184,6 +2185,8 @@ async function toCanvasItem(editor: Editor, shape: TLShape): Promise<CanvasItem>
   const bounds = getShapePageBoundsRecord(editor, shape)
   const asset = await getCanvasAssetContext(editor, shape, props)
   const text = getShapePlainText(props)
+  const kind = toCanvasItemKind(shape.type, props)
+  const style = isAnnotationCanvasItemKind(kind) ? getAnnotationStyle(props) : undefined
   const metadata = pickMetadata(props, [
     'versionId',
     'prompt',
@@ -2200,7 +2203,7 @@ async function toCanvasItem(editor: Editor, shape: TLShape): Promise<CanvasItem>
 
   return {
     id: shape.id,
-    kind: toCanvasItemKind(shape.type, props),
+    kind,
     canvasType: shape.type,
     parentId: shape.parentId,
     bounds: {
@@ -2208,9 +2211,14 @@ async function toCanvasItem(editor: Editor, shape: TLShape): Promise<CanvasItem>
       rotation: typeof shape.rotation === 'number' && Number.isFinite(shape.rotation) ? shape.rotation : undefined,
     },
     text,
+    ...(style ? { style } : {}),
     asset,
     metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
   }
+}
+
+function isAnnotationCanvasItemKind(kind: CanvasItemKind) {
+  return kind === 'text' || kind === 'note' || kind === 'arrow' || kind === 'shape'
 }
 
 async function getCanvasAssetContext(editor: Editor, shape: TLShape, props: Record<string, unknown>): Promise<CanvasAssetContext | undefined> {
